@@ -269,6 +269,24 @@ impl Archive {
         self.save()
     }
 
+    /// Replace the tag list of a document. Blank tags are dropped and
+    /// duplicates are collapsed, preserving the order they were given in.
+    pub fn set_tags(&mut self, doc_id: &str, tags: Vec<String>) -> Result<()> {
+        let mut cleaned: Vec<String> = Vec::new();
+        for tag in tags {
+            let tag = tag.trim().to_string();
+            if !tag.is_empty() && !cleaned.contains(&tag) {
+                cleaned.push(tag);
+            }
+        }
+        let doc = self
+            .get_mut(doc_id)
+            .ok_or_else(|| ArchiveError::DocumentNotFound(doc_id.to_string()))?;
+        doc.tags = cleaned;
+        doc.updated_at = Utc::now();
+        self.save()
+    }
+
     pub fn remove_document(&mut self, id: &str) -> Result<()> {
         let before = self.manifest.documents.len();
         self.manifest.documents.retain(|d| d.id != id);
@@ -456,5 +474,42 @@ mod tests {
             .unwrap();
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].items.len(), 2);
+    }
+
+    #[test]
+    fn set_tags_replaces_cleans_and_persists() {
+        let dir = std::env::temp_dir().join(format!("pa-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("notes.txt");
+        fs::write(&file, "hello").unwrap();
+
+        let mut archive = Archive::open(dir.join("archive")).unwrap();
+        let docs = archive.add_files(&[file], &AddOptions::default()).unwrap();
+        let id = docs[0].id.clone();
+
+        // Blank tags are dropped, duplicates collapsed, order preserved.
+        archive
+            .set_tags(
+                &id,
+                vec![
+                    "finance".into(),
+                    "  ".into(),
+                    " receipts ".into(),
+                    "finance".into(),
+                ],
+            )
+            .unwrap();
+        assert_eq!(archive.get(&id).unwrap().tags, vec!["finance", "receipts"]);
+
+        // The change survives a reopen (i.e. it hit the manifest).
+        let reopened = Archive::open(dir.join("archive")).unwrap();
+        assert_eq!(reopened.get(&id).unwrap().tags, vec!["finance", "receipts"]);
+
+        // Tags can be cleared entirely.
+        archive.set_tags(&id, vec![]).unwrap();
+        assert!(archive.get(&id).unwrap().tags.is_empty());
+
+        // Unknown documents report an error instead of silently succeeding.
+        assert!(archive.set_tags("nope", vec!["x".into()]).is_err());
     }
 }

@@ -558,6 +558,14 @@ fn remove_document(id: String) -> Result<(), String> {
     archive.remove_document(&id).map_err(err)
 }
 
+/// Replace the tag list of a document. Blank tags are dropped and
+/// duplicates are collapsed, preserving the order the user supplied.
+#[tauri::command]
+fn update_document_tags(id: String, tags: Vec<String>) -> Result<(), String> {
+    let mut archive = Archive::open(archive_root()).map_err(err)?;
+    archive.set_tags(&id, tags).map_err(err)
+}
+
 #[tauri::command]
 fn start_server(
     state: tauri::State<'_, AppState>,
@@ -726,6 +734,7 @@ pub fn run() {
             import_files,
             run_ocr,
             remove_document,
+            update_document_tags,
             start_server,
             stop_server,
             discover_peers,

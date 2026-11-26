@@ -10,6 +10,45 @@ async function invoke(cmd, args = {}) {
 
 const $ = (id) => document.getElementById(id);
 
+/* ------------------------------------------------------------------ theme */
+
+// 'system' | 'light' | 'dark' — stored so "system" keeps following OS changes.
+const THEME_MODES = ['system', 'light', 'dark'];
+
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === 'system') root.removeAttribute('data-theme');
+  else root.setAttribute('data-theme', mode);
+  localStorage.setItem('panarchiv.theme', mode);
+  updateThemeIcon(mode);
+}
+
+function currentThemeMode() {
+  return localStorage.getItem('panarchiv.theme') || 'system';
+}
+
+function updateThemeIcon(mode) {
+  const btn = $('theme-toggle');
+  if (!btn) return;
+  const icons = { system: '🌐', light: '☀️', dark: '🌙' };
+  const labels = {
+    system: 'Theme: follow system (click for light)',
+    light: 'Theme: light (click for dark)',
+    dark: 'Theme: dark (click for system)',
+  };
+  btn.textContent = icons[mode] || icons.system;
+  btn.title = labels[mode] || labels.system;
+  btn.setAttribute('aria-label', btn.title);
+}
+
+function initTheme() {
+  applyTheme(currentThemeMode());
+  // While in system mode, follow OS changes live.
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (currentThemeMode() === 'system') applyTheme('system');
+  });
+}
+
 /* ------------------------------------------------------------------ utils */
 
 function log(message) {
@@ -77,6 +116,153 @@ function fileIcon(filename, kind) {
   if (['ppt', 'pptx', 'odp'].includes(e)) return { ico: '📈', label: 'Presentation' };
   if (['zip', 'gz', 'tar', '7z', 'rar'].includes(e)) return { ico: '🗜️', label: 'Archive' };
   return { ico: '📎', label: kind || 'File' };
+}
+
+/* --------------------------------------------------------------- tag editor */
+
+let tagEditorDocId = null;
+let tagEditorTags = [];
+
+function closeTagEditor() {
+  const editor = $('tag-editor');
+  if (editor) editor.remove();
+  document.removeEventListener('click', closeTagEditorOnOutside);
+  tagEditorDocId = null;
+  tagEditorTags = [];
+}
+
+function closeTagEditorOnOutside(e) {
+  const editor = $('tag-editor');
+  if (editor && !editor.contains(e.target)) closeTagEditor();
+}
+
+function openTagEditor(btn, docId, currentTags) {
+  closeTagEditor();
+  tagEditorDocId = docId;
+  tagEditorTags = [...currentTags];
+
+  const rect = btn.getBoundingClientRect();
+  const editor = document.createElement('div');
+  editor.id = 'tag-editor';
+  editor.className = 'tag-editor';
+  editor.innerHTML = `
+    <div class="tag-editor-header">
+      <span>Tags</span>
+      <button class="icon-btn" id="tag-editor-close" aria-label="Close">✕</button>
+    </div>
+    <div class="tag-editor-tags" id="tag-editor-tags"></div>
+    <div class="tag-editor-input-row">
+      <input id="tag-editor-input" type="text" placeholder="Add a tag (comma separated)" />
+      <button class="mini primary" id="tag-editor-add">Add</button>
+    </div>
+    <div class="tag-editor-actions">
+      <button class="danger mini" id="tag-editor-cancel">Cancel</button>
+      <button class="primary mini" id="tag-editor-save">Save</button>
+    </div>
+  `;
+  document.body.appendChild(editor);
+  editor.classList.add('show');
+
+  const mw = Math.min(editor.offsetWidth, 320);
+  let left = Math.max(8, Math.min(rect.right - mw, window.innerWidth - mw - 8));
+  let top = rect.bottom + 6;
+  if (top + 220 > window.innerHeight) top = Math.max(8, rect.top - 230);
+  editor.style.left = `${left}px`;
+  editor.style.top = `${top}px`;
+
+  renderTagEditorTags();
+  $('tag-editor-input').focus();
+
+  $('tag-editor-close').addEventListener('click', closeTagEditor);
+  $('tag-editor-cancel').addEventListener('click', closeTagEditor);
+  $('tag-editor-add').addEventListener('click', addTagFromInput);
+  $('tag-editor-save').addEventListener('click', saveTags);
+  $('tag-editor-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') addTagFromInput();
+    if (e.key === 'Escape') closeTagEditor();
+  });
+
+  setTimeout(() => {
+    // Only arm the dismiss handler if this editor is still the open one
+    // (it may have been closed by Escape before the timeout fired).
+    if ($('tag-editor') === editor) document.addEventListener('click', closeTagEditorOnOutside);
+  }, 0);
+}
+
+function renderTagEditorTags() {
+  const container = $('tag-editor-tags');
+  if (!container) return;
+  container.innerHTML = tagEditorTags.map((tag, i) => `
+    <span class="tag tag-editor-tag" data-tag-index="${i}">
+      ${escapeHtml(tag)}
+      <button class="tag-editor-remove" data-tag-index="${i}" aria-label="Remove tag">✕</button>
+    </span>
+  `).join('') + '<span class="tag tag-editor-new" id="tag-editor-new-tag">+ New tag</span>';
+  container.querySelectorAll('.tag-editor-remove').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = Number(btn.dataset.tagIndex);
+      tagEditorTags.splice(idx, 1);
+      renderTagEditorTags();
+    });
+  });
+  container.querySelectorAll('.tag-editor-tag').forEach((span) => {
+    span.addEventListener('click', (e) => {
+      if (e.target.closest('.tag-editor-remove')) return;
+      const idx = Number(span.dataset.tagIndex);
+      const old = tagEditorTags[idx];
+      // Inline edit in place of the chip.
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'tag-edit-input';
+      input.value = old;
+      span.replaceWith(input);
+      input.focus();
+      input.select();
+      let committed = false;
+      const commit = () => {
+        if (committed) return;
+        committed = true;
+        const v = input.value.trim();
+        if (v) tagEditorTags[idx] = v;
+        renderTagEditorTags();
+      };
+      input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
+        if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); committed = true; renderTagEditorTags(); }
+      });
+      input.addEventListener('blur', commit);
+      e.stopPropagation();
+    });
+  });
+  $('tag-editor-new-tag').addEventListener('click', () => $('tag-editor-input').focus());
+}
+
+function addTagFromInput() {
+  const input = $('tag-editor-input');
+  const value = input.value.trim();
+  if (!value) return;
+  const newTags = splitTags(value);
+  for (const tag of newTags) {
+    if (!tagEditorTags.includes(tag)) tagEditorTags.push(tag);
+  }
+  input.value = '';
+  renderTagEditorTags();
+}
+
+async function saveTags() {
+  if (!tagEditorDocId) return;
+  try {
+    status('Saving tags...');
+    await invoke('update_document_tags', { id: tagEditorDocId, tags: tagEditorTags });
+    log(`Tags updated for document ${tagEditorDocId}`);
+    await refresh();
+    status('Ready');
+  } catch (e) {
+    log(`Failed to update tags: ${e}`);
+    status('Failed to update tags');
+  }
+  closeTagEditor();
 }
 
 /* --------------------------------------------------------------- programs */
@@ -332,6 +518,7 @@ function docCard(doc) {
     : `<span>${first ? fileIcon(first.filename, first.kind).ico : '📄'}</span>`;
   const tags = (doc.tags || []).map((t) =>
     `<span class="tag clickable" data-tag="${escapeHtml(t)}" title="Open folder ${escapeHtml(t)}">${escapeHtml(t)}</span>`).join('');
+  const tagList = tags || '<span class="tag tag-empty" data-action="tags" title="Add a tag">+ add tag</span>';
   const size = (doc.items || []).reduce((s, i) => s + (i.size || 0), 0);
   const filesLabel = `${doc.items.length} file${doc.items.length === 1 ? '' : 's'}${size ? ' · ' + humanSize(size) : ''}`;
 
@@ -341,9 +528,10 @@ function docCard(doc) {
         <div class="doc-icon">${iconHtml}</div>
         <div class="doc-info">
           <div class="doc-title">${escapeHtml(doc.title)}</div>
-          <div class="doc-meta">${tags}<span>${shortDate(doc.updated_at)}</span><span>·</span><span>${filesLabel}</span></div>
+          <div class="doc-meta">${tagList}<span>${shortDate(doc.updated_at)}</span><span>·</span><span>${filesLabel}</span></div>
         </div>
         <div class="doc-actions">
+          <button class="mini" data-action="tags" title="Add or edit tags">🏷️ Tags</button>
           <button class="mini" data-action="export" title="Export as bundle">Export</button>
           <button class="mini danger" data-action="del" title="Delete document">Delete</button>
         </div>
@@ -521,7 +709,7 @@ function closeOwMenuOnOutside(e) {
   if (m && !m.contains(e.target)) closeOwMenu();
 }
 
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeOwMenu(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeOwMenu(); closeTagEditor(); } });
 
 /* ------------------------------------------------- central click routing */
 
@@ -566,6 +754,11 @@ $('files').addEventListener('click', async (e) => {
   if (action === 'del') {
     try { await invoke('remove_document', { id: docId }); state.expanded.delete(docId); await refresh(); log('Document deleted'); }
     catch (err) { log(`Delete failed: ${err}`); }
+    return;
+  }
+  if (action === 'tags') {
+    const doc = allDocs.find((d) => d.id === docId);
+    if (doc) openTagEditor(btn, doc.id, doc.tags || []);
     return;
   }
   if (action === 'export') {
@@ -813,4 +1006,10 @@ loadState();
 renderPrograms();
 syncViewButtons();
 $('sort').value = state.sort;
+initTheme();
+$('theme-toggle').addEventListener('click', () => {
+  const current = currentThemeMode();
+  const next = THEME_MODES[(THEME_MODES.indexOf(current) + 1) % THEME_MODES.length];
+  applyTheme(next);
+});
 refresh();
