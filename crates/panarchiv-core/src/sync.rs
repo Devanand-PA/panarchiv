@@ -357,15 +357,18 @@ pub fn sync_with_peer(
 /// Serve a synchronisation request. Runs on the receiving device.
 ///
 /// `passphrase` unlocks a passphrase-protected archive.
+///
+/// The reader and writer are handed in rather than created here: the
+/// caller has already consumed the opening line from the same stream, and
+/// a `BufReader` may have read past that line. Continuing on the very
+/// same reader is the only way to guarantee that no byte is lost.
 pub fn handle_sync(
-    stream: TcpStream,
+    mut reader: BufReader<TcpStream>,
+    mut writer: BufWriter<TcpStream>,
     archive_root: &Path,
     request: SyncRequest,
     passphrase: Option<&str>,
 ) -> Result<SyncReceipt> {
-    let mut writer = BufWriter::new(stream.try_clone()?);
-    let mut reader = BufReader::new(stream);
-
     let mut archive = Archive::open_with_passphrase(archive_root, passphrase)?;
     let local = archive.inventory();
     let tag_filter = request.tag_filter.as_deref();

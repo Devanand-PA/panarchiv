@@ -5,7 +5,7 @@
 //! header so the receiver can verify integrity before importing.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -169,7 +169,11 @@ fn handle_peer(
     tags: Vec<String>,
     passphrase: Option<&str>,
 ) -> Result<()> {
-    let mut reader = BufReader::new(&stream);
+    // The reader owns a clone of the socket. `BufReader` is allowed to
+    // read past the newline of the opening line, so the bytes it buffers
+    // have to stay with the reader that consumed them — the sync handler
+    // continues on this very stream.
+    let mut reader = BufReader::new(stream.try_clone()?);
 
     // Peek at the magic first: the two protocols use different opening
     // messages, so the whole line has to be read before it can be parsed
@@ -186,7 +190,8 @@ fn handle_peer(
 
     if magic == crate::sync::SYNC_MAGIC {
         let request: crate::sync::SyncRequest = serde_json::from_str(line.trim())?;
-        let receipt = crate::sync::handle_sync(stream, archive_root, request, passphrase)?;
+        let writer = BufWriter::new(stream.try_clone()?);
+        let receipt = crate::sync::handle_sync(reader, writer, archive_root, request, passphrase)?;
         println!("{}", receipt.message);
         return Ok(());
     }
@@ -734,5 +739,98 @@ mod tests {
         let bytes = local.read_blob(&doc.items[0].blob).unwrap();
         assert_eq!(bytes, b"new version");
         assert!(local.verify().is_empty());
+    }
+
+    /// A peer that sends its inventory *and* its first payload in one go
+    /// must not lose the payload.
+    ///
+    /// The opening line is read through a `BufReader`, which is allowed to
+    /// read past the newline. If the bytes that follow the line end up in
+    /// that buffer and the handler then starts a *fresh* reader on the
+    /// socket, the payload is silently dropped and the server waits for
+    /// data that never arrives.
+    #[test]
+    fn a_pipelined_payload_is_not_lost() {
+        let dir = std::env::temp_dir().join(format!("pa-pipe-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // The server starts empty, so it is guaranteed to ask for the one
+        // file the client holds.
+        let remote_root = dir.join("remote");
+        Archive::open(&remote_root).unwrap();
+
+        let mut local = Archive::open(dir.join("local")).unwrap();
+        let file = dir.join("piped.txt");
+        std::fs::write(&file, "piped payload").unwrap();
+        local
+            .add_files(
+                &[file],
+                &crate::archive::AddOptions {
+                    tags: vec!["piped".into()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let port = {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = stop.clone();
+        let server_root = remote_root.clone();
+        let server = std::thread::spawn(move || {
+            serve_with_stop(
+                server_root,
+                port,
+                "remote-device".to_string(),
+                vec![],
+                server_stop,
+                None,
+            )
+            .unwrap();
+        });
+
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        wait_for_server(addr);
+
+        // Speak the protocol by hand so the request and the payload travel
+        // in a single write.
+        let content = b"piped payload";
+        let mut writer =
+            BufWriter::new(TcpStream::connect_timeout(&addr, Duration::from_secs(5)).unwrap());
+        let mut reader = BufReader::new(writer.get_ref().try_clone().unwrap());
+
+        let request = crate::sync::SyncRequest {
+            magic: crate::sync::SYNC_MAGIC.to_string(),
+            sender: "local-device".to_string(),
+            prefer_newest: false,
+            sync_tags: true,
+            tag_filter: None,
+            share_only: false,
+            items: local.inventory(),
+        };
+        write_json(&mut writer, &request).unwrap();
+        // The payload follows immediately — without waiting for the plan.
+        write_payload(&mut writer, content).unwrap();
+        writer.flush().unwrap();
+
+        let plan: crate::sync::SyncPlan = read_json(&mut reader).unwrap();
+        assert!(plan.accept);
+        assert_eq!(plan.send_to_peer.len(), 1, "the server wants our one file");
+        assert_eq!(plan.peer_sends.len(), 0, "the server has nothing to send");
+        let receipt: crate::sync::SyncReceipt = read_json(&mut reader).unwrap();
+        assert!(receipt.ok, "the server must accept the pipelined payload");
+        assert_eq!(receipt.received, 1);
+
+        std::thread::sleep(Duration::from_millis(150));
+        stop.store(true, Ordering::SeqCst);
+        server.join().unwrap();
+
+        // The file really arrived, with its tag.
+        let remote = Archive::open(&remote_root).unwrap();
+        assert_eq!(remote.list().len(), 1, "the pipelined payload was received");
+        assert_eq!(remote.list()[0].tags, vec!["piped".to_string()]);
+        assert!(remote.verify().is_empty());
     }
 }
