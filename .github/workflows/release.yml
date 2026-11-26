@@ -54,7 +54,9 @@ jobs:
         run: |
           mkdir -p dist
           cp target/release/panarchiv dist/panarchiv-linux-x86_64
-          cp -r apps/desktop/src-tauri/target/release/bundle/* dist/
+          cp apps/desktop/src-tauri/target/release/bundle/deb/*.deb dist/ 2>/dev/null || true
+          cp apps/desktop/src-tauri/target/release/bundle/rpm/*.rpm dist/ 2>/dev/null || true
+          cp apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage dist/ 2>/dev/null || true
 
       - name: Upload
         uses: actions/upload-artifact@v4
@@ -98,7 +100,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item target\release\panarchiv.exe dist\panarchiv-windows-x86_64.exe
-          Copy-Item apps\desktop\src-tauri\target\release\bundle\*\* dist\
+          Copy-Item apps\desktop\src-tauri\target\release\bundle\msi\*.msi dist\
 
       - name: Upload
         uses: actions/upload-artifact@v4
@@ -141,7 +143,7 @@ jobs:
         run: |
           mkdir -p dist
           cp target/release/panarchiv dist/panarchiv-macos-aarch64
-          cp -r apps/desktop/src-tauri/target/release/bundle/* dist/
+          cp apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg dist/
 
       - name: Upload
         uses: actions/upload-artifact@v4
@@ -187,7 +189,9 @@ jobs:
         run: npx tauri android build --ci --apk
 
       - name: Stage APKs
-        run: mkdir -p dist && cp -r apps/desktop/src-tauri/gen/android/app/build/outputs/apk/* dist/
+        run: |
+          mkdir -p dist
+          find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -exec cp {} dist/ \;
 
       - name: Upload
         uses: actions/upload-artifact@v4
