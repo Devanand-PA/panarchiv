@@ -223,12 +223,17 @@ body:not(.show-right) .sidebar.right { display: none; }
 .doc-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .doc-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .doc-title { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.doc-meta {
-  color: var(--muted); font-size: 11.5px; display: flex; flex-wrap: wrap;
-  gap: 4px 8px; align-items: center; min-width: 0;
-}
+
+/* The tag row and the meta row are separate rows on purpose. The meta
+   items (date, file count, size) are joined into one string, so they can
+   never end up one per line. */
 .doc-tags { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
-.doc-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* `min-width: 0` lets the ellipsis actually kick in: without it the flex
+   item's automatic minimum size is the full nowrap text width. */
+.doc-sub {
+  color: var(--muted); font-size: 11.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
 
 /* Actions live in their own bar. Keeping them out of the title row means
    they can never squeeze the title down to an unreadable width. */

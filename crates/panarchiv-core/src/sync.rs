@@ -176,8 +176,14 @@ pub fn plan(
     prefer_newest: bool,
     tag_filter: Option<&str>,
 ) -> (Vec<TransferItem>, Vec<TransferItem>) {
-    let local: Vec<&ItemInfo> = local.iter().filter(|i| matches_tag(i, tag_filter)).collect();
-    let remote: Vec<&ItemInfo> = remote.iter().filter(|i| matches_tag(i, tag_filter)).collect();
+    let local: Vec<&ItemInfo> = local
+        .iter()
+        .filter(|i| matches_tag(i, tag_filter))
+        .collect();
+    let remote: Vec<&ItemInfo> = remote
+        .iter()
+        .filter(|i| matches_tag(i, tag_filter))
+        .collect();
 
     let local_hashes: HashSet<&str> = local.iter().map(|i| i.hash.as_str()).collect();
     let remote_hashes: HashSet<&str> = remote.iter().map(|i| i.hash.as_str()).collect();
@@ -523,7 +529,10 @@ mod tests {
         let (to_peer, peer_sends) = plan(&local, &remote, true, None);
         assert!(to_peer.is_empty(), "the older version must not be pushed");
         assert_eq!(peer_sends.len(), 1);
-        assert_eq!(peer_sends[0].hash, "new", "the newer version must be fetched");
+        assert_eq!(
+            peer_sends[0].hash, "new",
+            "the newer version must be fetched"
+        );
 
         // We have the newer version; the peer does not.
         let (to_peer, peer_sends) = plan(&remote, &local, true, None);
@@ -561,7 +570,10 @@ mod tests {
 
     #[test]
     fn tag_filter_narrows_the_exchange() {
-        let local = vec![tagged("aaa", "a.txt", "work"), tagged("ccc", "c.txt", "private")];
+        let local = vec![
+            tagged("aaa", "a.txt", "work"),
+            tagged("ccc", "c.txt", "private"),
+        ];
         let remote = vec![tagged("bbb", "b.txt", "work")];
         let (to_peer, peer_sends) = plan(&local, &remote, false, Some("work"));
         assert_eq!(to_peer.len(), 1);

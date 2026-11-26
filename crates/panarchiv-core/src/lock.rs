@@ -50,7 +50,8 @@ impl ArchiveLock {
                         // The previous owner died without unlocking. Break the
                         // lock rather than hanging the UI forever.
                         let _ = FileExt::unlock(&file);
-                        file.lock_exclusive().map_err(crate::error::ArchiveError::Io)?;
+                        file.lock_exclusive()
+                            .map_err(crate::error::ArchiveError::Io)?;
                         return Ok(Self { file, path });
                     }
                     std::thread::sleep(Duration::from_millis(20));

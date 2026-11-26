@@ -32,8 +32,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::error::{msg, ArchiveError, Result};
 use crate::crypto::{Crypto, KeyError};
+use crate::error::{msg, ArchiveError, Result};
 use crate::lock::lock_archive;
 use crate::model::{
     kind_for_filename, mime_for_filename, ArchiveItem, Document, Manifest, OcrResult,
@@ -219,7 +219,9 @@ impl Archive {
         let data = serde_json::to_string_pretty(&self.manifest)?;
         let encrypted = self.crypto.encrypt(data.as_bytes())?;
         let final_path = self.root.join("manifest.json");
-        let tmp = self.root.join(format!("manifest.json.tmp.{}", uuid::Uuid::new_v4()));
+        let tmp = self
+            .root
+            .join(format!("manifest.json.tmp.{}", uuid::Uuid::new_v4()));
         fs::write(&tmp, &encrypted)?;
         match fs::rename(&tmp, &final_path) {
             Ok(()) => Ok(()),
@@ -777,7 +779,9 @@ fn write_atomic(dest: &Path, bytes: &[u8]) -> Result<()> {
     fs::create_dir_all(parent)?;
     let tmp = parent.join(format!(
         ".{}.tmp.{}",
-        dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        dest.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
         uuid::Uuid::new_v4()
     ));
     fs::write(&tmp, bytes)?;
@@ -951,7 +955,9 @@ mod tests {
 
         let other = dir.join("other.txt");
         fs::write(&other, "other").unwrap();
-        importer.add_files(&[other], &AddOptions::default()).unwrap();
+        importer
+            .add_files(&[other], &AddOptions::default())
+            .unwrap();
 
         let reopened = Archive::open(&root).unwrap();
         assert_eq!(
@@ -1005,7 +1011,10 @@ mod tests {
         // Opening it must succeed and transparently encrypt everything.
         let archive = Archive::open(&root).unwrap();
         assert_eq!(archive.list().len(), 1);
-        assert_eq!(archive.get(archive.list()[0].id.as_str()).unwrap().tags, vec!["old"]);
+        assert_eq!(
+            archive.get(archive.list()[0].id.as_str()).unwrap().tags,
+            vec!["old"]
+        );
         assert_eq!(archive.read_blob(&hash).unwrap(), content);
 
         let raw_manifest = fs::read(root.join("manifest.json")).unwrap();

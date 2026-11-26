@@ -168,7 +168,11 @@ pub fn export_bundle_by_tag(
 
 /// Import a bundle into an archive. Blobs are deduplicated by hash and
 /// documents receive fresh ids to avoid collisions.
-pub fn import_bundle(archive: &mut Archive, path: &Path, passphrase: Option<&str>) -> Result<Vec<String>> {
+pub fn import_bundle(
+    archive: &mut Archive,
+    path: &Path,
+    passphrase: Option<&str>,
+) -> Result<Vec<String>> {
     let mut raw = std::fs::read(path)?;
     if raw.starts_with(ENCRYPTED_BUNDLE_MAGIC) {
         let flags = *raw.get(ENCRYPTED_BUNDLE_MAGIC.len()).unwrap_or(&0);

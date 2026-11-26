@@ -297,6 +297,18 @@ pub fn serve_with_stop(
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, _)) => {
+                // The listener is non-blocking so the loop can poll the stop
+                // flag. On Linux the accepted socket does *not* inherit that
+                // flag, but on BSD/macOS it does — which would make every
+                // read fail with EAGAIN instead of waiting for data. Put
+                // the socket back into blocking mode explicitly.
+                if let Err(e) = stream.set_nonblocking(false) {
+                    eprintln!("could not configure the peer socket: {e}");
+                    continue;
+                }
+                // A stalled peer must not hold the thread forever.
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(120)));
                 let root = archive_root.clone();
                 let tags = tags.clone();
                 let passphrase = passphrase.clone();
@@ -431,6 +443,21 @@ pub fn local_ip() -> IpAddr {
 mod tests {
     use super::*;
 
+    /// Wait for the server to come up.
+    ///
+    /// The server binds its listener inside the spawned thread, so a test
+    /// that connects immediately can race it. Retrying for a few seconds
+    /// keeps the tests reliable on a loaded CI machine.
+    fn wait_for_server(addr: SocketAddr) {
+        for _ in 0..100 {
+            if TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("the test server did not come up at {addr}");
+    }
+
     #[test]
     fn transfer_imports_verified_file() {
         let dir = std::env::temp_dir().join(format!("pa-p2p-{}", uuid::Uuid::new_v4()));
@@ -446,11 +473,19 @@ mod tests {
         let server_stop = stop.clone();
         let root = dir.join("dst");
         let server = std::thread::spawn(move || {
-            serve_with_stop(root, port, "test-peer".to_string(), vec![], server_stop, None).unwrap();
+            serve_with_stop(
+                root,
+                port,
+                "test-peer".to_string(),
+                vec![],
+                server_stop,
+                None,
+            )
+            .unwrap();
         });
-        std::thread::sleep(Duration::from_millis(150));
 
         let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        wait_for_server(addr);
         let receipt = send_files(addr, &[file], "sender").unwrap();
         assert!(receipt.ok);
         assert_eq!(receipt.received, 1);
@@ -518,9 +553,9 @@ mod tests {
             )
             .unwrap();
         });
-        std::thread::sleep(Duration::from_millis(150));
 
         let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        wait_for_server(addr);
         let summary = crate::sync::sync_with_peer(
             addr,
             &mut local,
@@ -530,7 +565,10 @@ mod tests {
         .unwrap();
         assert_eq!(summary.sent, 1, "the local file must be sent");
         assert_eq!(summary.received, 1, "the remote file must be received");
-        assert_eq!(summary.tags_received, 1, "the tag must travel with the file");
+        assert_eq!(
+            summary.tags_received, 1,
+            "the tag must travel with the file"
+        );
 
         std::thread::sleep(Duration::from_millis(150));
         stop.store(true, Ordering::SeqCst);
@@ -547,7 +585,8 @@ mod tests {
 
     /// Sharing a tag pushes the tagged documents and asks for nothing back.
     #[test]
-    fn sharing_a_tag_pushes_only_that_tag() {        let dir = std::env::temp_dir().join(format!("pa-share-{}", uuid::Uuid::new_v4()));
+    fn sharing_a_tag_pushes_only_that_tag() {
+        let dir = std::env::temp_dir().join(format!("pa-share-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let mut local = Archive::open(dir.join("local")).unwrap();
@@ -586,9 +625,9 @@ mod tests {
             )
             .unwrap();
         });
-        std::thread::sleep(Duration::from_millis(150));
 
         let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        wait_for_server(addr);
         let summary = crate::sync::sync_with_peer(
             addr,
             &mut local,
@@ -665,9 +704,9 @@ mod tests {
             )
             .unwrap();
         });
-        std::thread::sleep(Duration::from_millis(150));
 
         let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        wait_for_server(addr);
         let summary = crate::sync::sync_with_peer(
             addr,
             &mut local,

@@ -101,7 +101,10 @@ impl Crypto {
     /// * `passphrase` — `None` opens (or creates) an unprotected key file.
     ///   `Some(p)` creates a passphrase-wrapped key file for a new archive,
     ///   or unwraps an existing one.
-    pub fn load_or_create(root: &Path, passphrase: Option<&str>) -> std::result::Result<Self, KeyError> {
+    pub fn load_or_create(
+        root: &Path,
+        passphrase: Option<&str>,
+    ) -> std::result::Result<Self, KeyError> {
         let path = key_path(root);
         if path.exists() {
             Self::load(&path, passphrase)
@@ -144,10 +147,7 @@ impl Crypto {
                 let derived = derive_key(passphrase, salt, m_cost, t_cost, p_cost);
                 let cipher = XChaCha20Poly1305::new(Key::from_slice(&derived));
                 cipher
-                    .decrypt(
-                        XNonce::from_slice(nonce),
-                        wrapped,
-                    )
+                    .decrypt(XNonce::from_slice(nonce), wrapped)
                     .map_err(|_| KeyError::WrongPassphrase)?
             }
             _ => return Err(KeyError::Corrupt),
@@ -271,7 +271,13 @@ fn serialize_key(master: &[u8; KEY_LEN], passphrase: Option<&str>) -> Vec<u8> {
         Some(passphrase) => {
             let mut salt = [0u8; 16];
             OsRng.fill_bytes(&mut salt);
-            let derived = derive_key(passphrase, &salt, ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST);
+            let derived = derive_key(
+                passphrase,
+                &salt,
+                ARGON2_M_COST,
+                ARGON2_T_COST,
+                ARGON2_P_COST,
+            );
             let cipher = XChaCha20Poly1305::new(Key::from_slice(&derived));
             let mut nonce = [0u8; NONCE_LEN];
             OsRng.fill_bytes(&mut nonce);
@@ -298,7 +304,13 @@ pub fn is_encrypted(data: &[u8]) -> bool {
 }
 
 /// Derive a 32-byte key from a passphrase using Argon2id.
-fn derive_key(passphrase: &str, salt: &[u8], m_cost: u32, t_cost: u32, p_cost: u32) -> [u8; KEY_LEN] {
+fn derive_key(
+    passphrase: &str,
+    salt: &[u8],
+    m_cost: u32,
+    t_cost: u32,
+    p_cost: u32,
+) -> [u8; KEY_LEN] {
     let params = Params::new(m_cost, t_cost, p_cost, None).unwrap_or_default();
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut key = [0u8; KEY_LEN];
@@ -357,7 +369,13 @@ const STANDALONE_MAGIC: &[u8; 7] = b"PBNDL1\0";
 pub fn encrypt_with_passphrase(plaintext: &[u8], passphrase: &str) -> Result<Vec<u8>> {
     let mut salt = [0u8; 16];
     OsRng.fill_bytes(&mut salt);
-    let derived = derive_key(passphrase, &salt, ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST);
+    let derived = derive_key(
+        passphrase,
+        &salt,
+        ARGON2_M_COST,
+        ARGON2_T_COST,
+        ARGON2_P_COST,
+    );
     let cipher = XChaCha20Poly1305::new(Key::from_slice(&derived));
     let mut nonce = [0u8; NONCE_LEN];
     OsRng.fill_bytes(&mut nonce);
@@ -365,7 +383,8 @@ pub fn encrypt_with_passphrase(plaintext: &[u8], passphrase: &str) -> Result<Vec
         .encrypt(XNonce::from_slice(&nonce), plaintext)
         .map_err(|_| msg("encryption failed"))?;
 
-    let mut out = Vec::with_capacity(STANDALONE_MAGIC.len() + 16 + 12 + NONCE_LEN + ciphertext.len());
+    let mut out =
+        Vec::with_capacity(STANDALONE_MAGIC.len() + 16 + 12 + NONCE_LEN + ciphertext.len());
     out.extend_from_slice(STANDALONE_MAGIC);
     out.extend_from_slice(&salt);
     out.extend_from_slice(&ARGON2_M_COST.to_le_bytes());
@@ -450,7 +469,11 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = fs::metadata(key_path(&dir)).unwrap().permissions().mode();
-            assert_eq!(mode & 0o777, 0o600, "key file must not be group/world readable");
+            assert_eq!(
+                mode & 0o777,
+                0o600,
+                "key file must not be group/world readable"
+            );
         }
     }
 

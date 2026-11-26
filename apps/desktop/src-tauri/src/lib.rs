@@ -127,7 +127,10 @@ fn safe_name(name: &str) -> String {
     name.replace(['/', '\\', '\0'], "_")
 }
 
-fn materialize(app: &AppHandle, files: &[FilePayload]) -> Result<(PathBuf, Vec<(PathBuf, String)>), String> {
+fn materialize(
+    app: &AppHandle,
+    files: &[FilePayload],
+) -> Result<(PathBuf, Vec<(PathBuf, String)>), String> {
     let archive = open_archive(app)?;
     let dir = archive
         .root()
@@ -186,7 +189,9 @@ fn materialized_item_path(
     fs::create_dir_all(&opens).map_err(err)?;
     let target = opens.join(open_file_name(item));
     if !target.exists() {
-        archive.export_item(doc_id, &item.id, &target).map_err(err)?;
+        archive
+            .export_item(doc_id, &item.id, &target)
+            .map_err(err)?;
     }
     Ok(target)
 }
@@ -233,7 +238,10 @@ fn spawn_program(template: &str, file: &Path) -> Result<(), String> {
     let has_placeholder = template.contains("{file}") || template.contains("{path}");
     let mut args: Vec<String> = tokenize(template)
         .into_iter()
-        .map(|tok| tok.replace("{file}", &file_str).replace("{path}", &file_str))
+        .map(|tok| {
+            tok.replace("{file}", &file_str)
+                .replace("{path}", &file_str)
+        })
         .collect();
     if !has_placeholder {
         args.push(file_str.clone());
@@ -285,7 +293,11 @@ fn reveal_path(path: &Path) -> Result<(), String> {
     let result = (|| -> std::io::Result<()> {
         #[cfg(target_os = "macos")]
         {
-            Command::new("open").arg("-R").arg(path).spawn().map(|_| ())?;
+            Command::new("open")
+                .arg("-R")
+                .arg(path)
+                .spawn()
+                .map(|_| ())?;
         }
         #[cfg(target_os = "windows")]
         {
@@ -323,8 +335,7 @@ fn open_path_with(path: &Path, program: Option<&str>) -> Result<(), String> {
 /// Minimal dependency-free base64 encoder (used to hand image thumbnails to
 /// the WebView as data URLs).
 fn base64(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b0 = chunk[0] as u32;
@@ -405,7 +416,9 @@ fn android_mime(env: &mut JNIEnv<'_>, fallback: &str, ext: &str) -> String {
 fn android_open_chooser(archive: &Archive, doc_id: &str, item: &ArchiveItem) -> Result<(), String> {
     let ctx = android_context();
     let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("jvm: {e}"))?;
-    let mut env = vm.attach_current_thread().map_err(|e| format!("attach thread: {e}"))?;
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| format!("attach thread: {e}"))?;
     // The activity is a valid `Context`; ndk-context holds a global ref to it.
     let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
 
@@ -429,7 +442,9 @@ fn android_open_chooser(archive: &Archive, doc_id: &str, item: &ArchiveItem) -> 
     fs::create_dir_all(&opens_dir).map_err(err)?;
     let target = opens_dir.join(open_file_name(item));
     if !target.exists() {
-        archive.export_item(doc_id, &item.id, &target).map_err(err)?;
+        archive
+            .export_item(doc_id, &item.id, &target)
+            .map_err(err)?;
     }
 
     // Authority is the applicationId (equals getPackageName()) + ".fileprovider",
@@ -451,13 +466,22 @@ fn android_open_chooser(archive: &Archive, doc_id: &str, item: &ArchiveItem) -> 
         .map_err(|e| format!("new_string: {e}"))?;
     let target_obj: JObject = target_jstr.into();
     let java_file = env
-        .new_object("java/io/File", "(Ljava/lang/String;)V", &[JValue::Object(&target_obj)])
+        .new_object(
+            "java/io/File",
+            "(Ljava/lang/String;)V",
+            &[JValue::Object(&target_obj)],
+        )
         .map_err(|e| format!("new File: {e}"))?;
 
     // androidx.core.content.FileProvider lives in the APK, so load it through
     // the activity's classloader to work from any thread (not just the UI one).
     let loader = env
-        .call_method(&activity, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .call_method(
+            &activity,
+            "getClassLoader",
+            "()Ljava/lang/ClassLoader;",
+            &[],
+        )
         .and_then(|v| v.l())
         .map_err(|e| format!("getClassLoader: {e}"))?;
     let fp_name = env
@@ -628,11 +652,7 @@ fn set_passphrase(
     // Open the archive with the *current* passphrase first, so the user
     // has to prove they know the existing one before changing it.
     let root = archive_root(&app)?;
-    let current = state
-        .passphrase
-        .lock()
-        .ok()
-        .and_then(|p| p.clone());
+    let current = state.passphrase.lock().ok().and_then(|p| p.clone());
     let mut archive = Archive::open_with_passphrase(&root, current.as_deref()).map_err(err)?;
     archive.set_passphrase(new_pass.as_deref()).map_err(err)?;
 
@@ -896,7 +916,12 @@ fn import_bundle(app: AppHandle, name: String, bytes: Vec<u8>) -> Result<usize, 
 /// instead (see [`android_open_chooser`]).
 #[tauri::command]
 #[cfg_attr(target_os = "android", allow(unused_variables))]
-fn open_item(app: AppHandle, doc: String, item: String, program: Option<String>) -> Result<(), String> {
+fn open_item(
+    app: AppHandle,
+    doc: String,
+    item: String,
+    program: Option<String>,
+) -> Result<(), String> {
     let archive = open_archive(&app)?;
     let document = archive
         .get(&doc)

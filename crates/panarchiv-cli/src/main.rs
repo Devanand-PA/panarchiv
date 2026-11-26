@@ -344,12 +344,7 @@ fn main() -> Result<()> {
             } => {
                 let archive = open_archive(&archive_path, passphrase)?;
                 let count = match tag {
-                    Some(tag) => bundle::export_bundle_by_tag(
-                        &archive,
-                        &tag,
-                        &dest,
-                        passphrase,
-                    )?,
+                    Some(tag) => bundle::export_bundle_by_tag(&archive, &tag, &dest, passphrase)?,
                     None => {
                         let selection = if all {
                             None

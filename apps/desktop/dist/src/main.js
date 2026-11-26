@@ -548,10 +548,8 @@ function docCard(doc) {
         <div class="doc-icon">${iconHtml}</div>
         <div class="doc-info">
           <div class="doc-title" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
-          <div class="doc-meta">
-            <span class="doc-tags">${tagList}</span>
-            <span class="doc-sub">${escapeHtml(parts.join(' · '))}</span>
-          </div>
+          <div class="doc-tags">${tagList}</div>
+          <div class="doc-sub">${escapeHtml(parts.join(' · '))}</div>
         </div>
       </div>
       <div class="doc-actions">
