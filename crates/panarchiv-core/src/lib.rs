@@ -8,11 +8,15 @@
 pub mod archive;
 pub mod bundle;
 pub mod capture;
+pub mod crypto;
 pub mod error;
+pub mod lock;
 pub mod model;
 pub mod ocr;
 pub mod p2p;
+pub mod paths;
+pub mod sync;
 
-pub use archive::{AddOptions, Archive};
+pub use archive::{AddOptions, Archive, ItemInfo};
 pub use error::{ArchiveError, Result};
 pub use model::{ArchiveItem, Document, ItemKind, Manifest, OcrResult};

@@ -61,7 +61,7 @@ pub struct Peer {
     pub addr: SocketAddr,
 }
 
-fn write_json<T: Serialize, W: Write>(writer: &mut W, value: &T) -> Result<()> {
+pub(crate) fn write_json<T: Serialize, W: Write>(writer: &mut W, value: &T) -> Result<()> {
     let mut data = serde_json::to_vec(value)?;
     data.push(b'\n');
     writer.write_all(&data)?;
@@ -69,7 +69,7 @@ fn write_json<T: Serialize, W: Write>(writer: &mut W, value: &T) -> Result<()> {
     Ok(())
 }
 
-fn read_json<T: DeserializeOwned, R: BufRead>(reader: &mut R) -> Result<T> {
+pub(crate) fn read_json<T: DeserializeOwned, R: BufRead>(reader: &mut R) -> Result<T> {
     let mut line = String::new();
     let n = reader.read_line(&mut line)?;
     if n == 0 {
@@ -78,13 +78,13 @@ fn read_json<T: DeserializeOwned, R: BufRead>(reader: &mut R) -> Result<T> {
     serde_json::from_str(line.trim()).map_err(Into::into)
 }
 
-fn write_payload<W: Write>(writer: &mut W, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_payload<W: Write>(writer: &mut W, bytes: &[u8]) -> Result<()> {
     writer.write_all(&(bytes.len() as u64).to_le_bytes())?;
     writer.write_all(bytes)?;
     Ok(())
 }
 
-fn read_exact_payload<R: Read>(reader: &mut R, len: u64) -> Result<Vec<u8>> {
+pub(crate) fn read_exact_payload<R: Read>(reader: &mut R, len: u64) -> Result<Vec<u8>> {
     if len > 8 * 1024 * 1024 * 1024 {
         return Err(msg("refusing payload larger than 8 GiB"));
     }
@@ -158,9 +158,40 @@ pub fn send_files(addr: SocketAddr, paths: &[PathBuf], sender_name: &str) -> Res
 }
 
 /// Handle a single inbound connection.
-fn handle_peer(stream: TcpStream, archive_root: &Path, tags: Vec<String>) -> Result<()> {
+///
+/// Two protocols share the port: `PARCHIV1` pushes a handful of files to
+/// the peer, `PARCHIV2` reconciles the two archives (see [`crate::sync`]).
+/// The opening message carries the magic, so the receiver can tell them
+/// apart before committing to either shape.
+fn handle_peer(
+    stream: TcpStream,
+    archive_root: &Path,
+    tags: Vec<String>,
+    passphrase: Option<&str>,
+) -> Result<()> {
     let mut reader = BufReader::new(&stream);
-    let hello: Hello = read_json(&mut reader)?;
+
+    // Peek at the magic first: the two protocols use different opening
+    // messages, so the whole line has to be read before it can be parsed
+    // as either shape.
+    let mut line = String::new();
+    let n = reader.read_line(&mut line)?;
+    if n == 0 {
+        return Err(msg("peer closed the connection"));
+    }
+    let magic = serde_json::from_str::<serde_json::Value>(line.trim())
+        .ok()
+        .and_then(|v| v.get("magic").and_then(|m| m.as_str()).map(str::to_string))
+        .unwrap_or_default();
+
+    if magic == crate::sync::SYNC_MAGIC {
+        let request: crate::sync::SyncRequest = serde_json::from_str(line.trim())?;
+        let receipt = crate::sync::handle_sync(stream, archive_root, request, passphrase)?;
+        println!("{}", receipt.message);
+        return Ok(());
+    }
+
+    let hello: Hello = serde_json::from_str(line.trim())?;
     if hello.magic != MAGIC {
         return Err(ArchiveError::Protocol("unknown peer protocol".into()));
     }
@@ -172,7 +203,7 @@ fn handle_peer(stream: TcpStream, archive_root: &Path, tags: Vec<String>) -> Res
     let mut writer = stream.try_clone()?;
     write_json(&mut writer, &accept)?;
 
-    let mut archive = Archive::open(archive_root)?;
+    let mut archive = Archive::open_with_passphrase(archive_root, passphrase)?;
     let mut received = 0usize;
     for meta in &hello.files {
         let len_buf = {
@@ -222,17 +253,41 @@ pub fn serve(archive_root: PathBuf, port: u16, name: String, tags: Vec<String>) 
         name,
         tags,
         Arc::new(AtomicBool::new(false)),
+        None,
+    )
+}
+
+/// Like [`serve`], but unlocks a passphrase-protected archive so the
+/// endpoint can accept incoming transfers and sync requests.
+pub fn serve_with_passphrase(
+    archive_root: PathBuf,
+    port: u16,
+    name: String,
+    tags: Vec<String>,
+    passphrase: Option<String>,
+) -> Result<()> {
+    serve_with_stop(
+        archive_root,
+        port,
+        name,
+        tags,
+        Arc::new(AtomicBool::new(false)),
+        passphrase,
     )
 }
 
 /// Like [`serve`], but stops cleanly when `stop` is set. Used by the GUI so a
 /// running server can be toggled from a button.
+///
+/// `passphrase` unlocks a passphrase-protected archive so the server can
+/// accept incoming transfers and sync requests.
 pub fn serve_with_stop(
     archive_root: PathBuf,
     port: u16,
     name: String,
     tags: Vec<String>,
     stop: Arc<AtomicBool>,
+    passphrase: Option<String>,
 ) -> Result<()> {
     let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port))?;
     listener.set_nonblocking(true)?;
@@ -244,8 +299,9 @@ pub fn serve_with_stop(
             Ok((stream, _)) => {
                 let root = archive_root.clone();
                 let tags = tags.clone();
+                let passphrase = passphrase.clone();
                 std::thread::spawn(move || {
-                    if let Err(e) = handle_peer(stream, &root, tags) {
+                    if let Err(e) = handle_peer(stream, &root, tags, passphrase.as_deref()) {
                         eprintln!("peer transfer failed: {e}");
                     }
                 });
@@ -390,7 +446,7 @@ mod tests {
         let server_stop = stop.clone();
         let root = dir.join("dst");
         let server = std::thread::spawn(move || {
-            serve_with_stop(root, port, "test-peer".to_string(), vec![], server_stop).unwrap();
+            serve_with_stop(root, port, "test-peer".to_string(), vec![], server_stop, None).unwrap();
         });
         std::thread::sleep(Duration::from_millis(150));
 
@@ -407,5 +463,237 @@ mod tests {
         assert_eq!(archive.list().len(), 1);
         assert_eq!(archive.search("hello.txt").len(), 1);
         assert!(archive.verify().is_empty());
+    }
+
+    /// Two devices exchange their archives over the wire. Each side holds
+    /// one file the other does not, so both directions have to be exercised.
+    #[test]
+    fn sync_exchanges_missing_files_in_both_directions() {
+        let dir = std::env::temp_dir().join(format!("pa-sync-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut local = Archive::open(dir.join("local")).unwrap();
+        let local_file = dir.join("local.txt");
+        std::fs::write(&local_file, "from the local device").unwrap();
+        local
+            .add_files(
+                &[local_file],
+                &crate::archive::AddOptions {
+                    tags: vec!["shared".into()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let remote_root = dir.join("remote");
+        let mut remote = Archive::open(&remote_root).unwrap();
+        let remote_file = dir.join("remote.txt");
+        std::fs::write(&remote_file, "from the remote device").unwrap();
+        remote
+            .add_files(
+                &[remote_file],
+                &crate::archive::AddOptions {
+                    tags: vec!["shared".into()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        drop(remote);
+
+        let port = {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = stop.clone();
+        let server_root = remote_root.clone();
+        let server = std::thread::spawn(move || {
+            serve_with_stop(
+                server_root,
+                port,
+                "remote-device".to_string(),
+                vec![],
+                server_stop,
+                None,
+            )
+            .unwrap();
+        });
+        std::thread::sleep(Duration::from_millis(150));
+
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        let summary = crate::sync::sync_with_peer(
+            addr,
+            &mut local,
+            "local-device",
+            &crate::sync::SyncOptions::full_sync(),
+        )
+        .unwrap();
+        assert_eq!(summary.sent, 1, "the local file must be sent");
+        assert_eq!(summary.received, 1, "the remote file must be received");
+        assert_eq!(summary.tags_received, 1, "the tag must travel with the file");
+
+        std::thread::sleep(Duration::from_millis(150));
+        stop.store(true, Ordering::SeqCst);
+        server.join().unwrap();
+
+        // Both sides now hold both files.
+        assert_eq!(local.list().len(), 2);
+        let remote = Archive::open(&remote_root).unwrap();
+        assert_eq!(remote.list().len(), 2);
+        assert_eq!(remote.search("remote.txt").len(), 1);
+        assert_eq!(remote.search("local.txt").len(), 1);
+        assert!(remote.verify().is_empty());
+    }
+
+    /// Sharing a tag pushes the tagged documents and asks for nothing back.
+    #[test]
+    fn sharing_a_tag_pushes_only_that_tag() {        let dir = std::env::temp_dir().join(format!("pa-share-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut local = Archive::open(dir.join("local")).unwrap();
+        for (name, tag) in [("public.txt", "public"), ("secret.txt", "private")] {
+            let path = dir.join(name);
+            std::fs::write(&path, name).unwrap();
+            local
+                .add_files(
+                    &[path],
+                    &crate::archive::AddOptions {
+                        tags: vec![tag.into()],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+
+        let remote_root = dir.join("remote");
+        Archive::open(&remote_root).unwrap();
+
+        let port = {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = stop.clone();
+        let server_root = remote_root.clone();
+        let server = std::thread::spawn(move || {
+            serve_with_stop(
+                server_root,
+                port,
+                "remote-device".to_string(),
+                vec![],
+                server_stop,
+                None,
+            )
+            .unwrap();
+        });
+        std::thread::sleep(Duration::from_millis(150));
+
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        let summary = crate::sync::sync_with_peer(
+            addr,
+            &mut local,
+            "local-device",
+            &crate::sync::SyncOptions::share_tag("public"),
+        )
+        .unwrap();
+        assert_eq!(summary.sent, 1, "only the tagged file is sent");
+        assert_eq!(summary.received, 0, "sharing asks for nothing back");
+
+        std::thread::sleep(Duration::from_millis(150));
+        stop.store(true, Ordering::SeqCst);
+        server.join().unwrap();
+
+        let remote = Archive::open(&remote_root).unwrap();
+        assert_eq!(remote.list().len(), 1);
+        assert_eq!(remote.list()[0].tags, vec!["public".to_string()]);
+        assert!(remote.verify().is_empty());
+    }
+
+    /// With "select newest" the device that was missing the newer version
+    /// receives it and drops the stale copy, instead of ending up with two
+    /// documents of the same name.
+    #[test]
+    fn prefer_newest_replaces_the_stale_version() {
+        let dir = std::env::temp_dir().join(format!("pa-newest-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let old = chrono::Utc::now() - chrono::Duration::days(30);
+        let new = chrono::Utc::now();
+
+        // The local device holds the old version...
+        let mut local = Archive::open(dir.join("local")).unwrap();
+        local
+            .import_bytes(
+                b"old version",
+                "report.pdf",
+                Some("Report".into()),
+                vec!["work".into()],
+                Some(old),
+            )
+            .unwrap();
+        assert_eq!(local.list().len(), 1);
+
+        // ...and the peer holds the new one.
+        let remote_root = dir.join("remote");
+        let mut remote = Archive::open(&remote_root).unwrap();
+        remote
+            .import_bytes(
+                b"new version",
+                "report.pdf",
+                Some("Report".into()),
+                vec!["work".into()],
+                Some(new),
+            )
+            .unwrap();
+        drop(remote);
+
+        let port = {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = stop.clone();
+        let server_root = remote_root.clone();
+        let server = std::thread::spawn(move || {
+            serve_with_stop(
+                server_root,
+                port,
+                "remote-device".to_string(),
+                vec![],
+                server_stop,
+                None,
+            )
+            .unwrap();
+        });
+        std::thread::sleep(Duration::from_millis(150));
+
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        let summary = crate::sync::sync_with_peer(
+            addr,
+            &mut local,
+            "local-device",
+            &crate::sync::SyncOptions {
+                prefer_newest: true,
+                sync_tags: true,
+                tag_filter: None,
+                share_only: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(summary.received, 1, "the newer version is fetched");
+        assert_eq!(summary.sent, 0, "the older version is not pushed");
+
+        std::thread::sleep(Duration::from_millis(150));
+        stop.store(true, Ordering::SeqCst);
+        server.join().unwrap();
+
+        // The stale copy is gone: exactly one document remains and it
+        // holds the newer contents.
+        assert_eq!(local.list().len(), 1, "the stale version must be replaced");
+        let doc = &local.list()[0];
+        assert_eq!(doc.items.len(), 1);
+        let bytes = local.read_blob(&doc.items[0].blob).unwrap();
+        assert_eq!(bytes, b"new version");
+        assert!(local.verify().is_empty());
     }
 }

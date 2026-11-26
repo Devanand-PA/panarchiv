@@ -41,6 +41,12 @@ pub struct ArchiveItem {
     pub height: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ocr: Option<OcrResult>,
+    /// When the source file was last modified. Two devices can hold
+    /// different versions of the same file; the newer `version` wins during
+    /// a sync. `None` for items imported without source metadata (older
+    /// archives, or content received over the network).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

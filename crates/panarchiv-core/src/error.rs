@@ -24,6 +24,10 @@ pub enum ArchiveError {
     Ocr(String),
     #[error("protocol error: {0}")]
     Protocol(String),
+    #[error("this archive is protected by a passphrase; enter it to continue")]
+    PassphraseRequired,
+    #[error("incorrect passphrase")]
+    WrongPassphrase,
 }
 
 pub type Result<T> = std::result::Result<T, ArchiveError>;

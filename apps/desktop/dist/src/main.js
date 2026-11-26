@@ -254,13 +254,15 @@ async function saveTags() {
   if (!tagEditorDocId) return;
   try {
     status('Saving tags...');
-    await invoke('update_document_tags', { id: tagEditorDocId, tags: tagEditorTags });
+    await guarded(() => invoke('update_document_tags', { id: tagEditorDocId, tags: tagEditorTags }));
     log(`Tags updated for document ${tagEditorDocId}`);
     await refresh();
     status('Ready');
   } catch (e) {
-    log(`Failed to update tags: ${e}`);
-    status('Failed to update tags');
+    if (!/cancelled/i.test(String(e))) {
+      log(`Failed to update tags: ${e}`);
+      status('Failed to update tags');
+    }
   }
   closeTagEditor();
 }
@@ -336,6 +338,7 @@ function renderPrograms() {
 /* ------------------------------------------------------------------ state */
 
 let allDocs = [];
+let archiveInfo = null;
 const state = {
   query: '',
   selected: { type: 'all' }, // { type:'all' } | { type:'untagged' } | { type:'path', path:[...] }
@@ -510,31 +513,51 @@ function renderFiles() {
   lazyThumbs();
 }
 
+// Tags beyond this many are collapsed into a "+N" chip so cards keep a
+// uniform height and the title always has room.
+const MAX_VISIBLE_TAGS = 3;
+
 function docCard(doc) {
   const open = state.expanded.has(doc.id);
   const first = (doc.items || [])[0];
   const iconHtml = first && first.kind === 'Image'
     ? `<img data-thumb="${first.blob}" alt="" />`
     : `<span>${first ? fileIcon(first.filename, first.kind).ico : '📄'}</span>`;
-  const tags = (doc.tags || []).map((t) =>
-    `<span class="tag clickable" data-tag="${escapeHtml(t)}" title="Open folder ${escapeHtml(t)}">${escapeHtml(t)}</span>`).join('');
-  const tagList = tags || '<span class="tag tag-empty" data-action="tags" title="Add a tag">+ add tag</span>';
+
+  const docTags = doc.tags || [];
+  const shownTags = docTags.slice(0, MAX_VISIBLE_TAGS);
+  const hiddenTags = docTags.length - shownTags.length;
+  const tagChips = shownTags.map((t) =>
+    `<button type="button" class="tag clickable" data-tag="${escapeHtml(t)}" title="Open folder ${escapeHtml(t)}">${escapeHtml(t)}</button>`).join('');
+  const moreChip = hiddenTags > 0
+    ? `<button type="button" class="tag tag-more" data-action="tags" title="Show ${hiddenTags} more tag(s)">+${hiddenTags}</button>`
+    : '';
+  const tagList = tagChips
+    ? tagChips + moreChip
+    : '<button type="button" class="tag tag-empty" data-action="tags" title="Add a tag">+ add tag</button>';
+
   const size = (doc.items || []).reduce((s, i) => s + (i.size || 0), 0);
-  const filesLabel = `${doc.items.length} file${doc.items.length === 1 ? '' : 's'}${size ? ' · ' + humanSize(size) : ''}`;
+  const parts = [shortDate(doc.updated_at), `${doc.items.length} file${doc.items.length === 1 ? '' : 's'}`];
+  if (size) parts.push(humanSize(size));
+
+  const title = (doc.title || '').trim() || 'Untitled';
 
   return `
     <article class="doc ${open ? 'expanded' : ''}" data-doc="${doc.id}">
       <div class="doc-main" data-action="toggle">
         <div class="doc-icon">${iconHtml}</div>
         <div class="doc-info">
-          <div class="doc-title">${escapeHtml(doc.title)}</div>
-          <div class="doc-meta">${tagList}<span>${shortDate(doc.updated_at)}</span><span>·</span><span>${filesLabel}</span></div>
+          <div class="doc-title" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
+          <div class="doc-meta">
+            <span class="doc-tags">${tagList}</span>
+            <span class="doc-sub">${escapeHtml(parts.join(' · '))}</span>
+          </div>
         </div>
-        <div class="doc-actions">
-          <button class="mini" data-action="tags" title="Add or edit tags">🏷️ Tags</button>
-          <button class="mini" data-action="export" title="Export as bundle">Export</button>
-          <button class="mini danger" data-action="del" title="Delete document">Delete</button>
-        </div>
+      </div>
+      <div class="doc-actions">
+        <button type="button" class="mini" data-action="tags" title="Add or edit tags">Tags</button>
+        <button type="button" class="mini" data-action="export" title="Export as bundle">Export</button>
+        <button type="button" class="mini danger" data-action="del" title="Delete document">Delete</button>
       </div>
       ${open ? `<div class="doc-items">${(doc.items || []).map(itemsRow).join('') || '<div class="hint">No files.</div>'}</div>` : ''}
     </article>`;
@@ -763,10 +786,10 @@ $('files').addEventListener('click', async (e) => {
   }
   if (action === 'export') {
     try {
-      const result = await invoke('export_bundle', {
+      const result = await guarded(() => invoke('export_bundle', {
         name: $('bundle-name').value.trim() || 'panarchiv-export.parbundle',
-        ids: [docId], all: false,
-      });
+        ids: [docId], all: false, tag: null,
+      }));
       log(result);
     } catch (err) { log(`Export failed: ${err}`); }
   }
@@ -850,18 +873,19 @@ async function importSelected(input, suggestedTitle) {
   try {
     status('Importing...');
     const files = await payloads(input.files);
-    const count = await invoke('import_files', {
+    const count = await guarded(() => invoke('import_files', {
       files,
       title: $('import-title').value.trim() || suggestedTitle || null,
       tags: splitTags($('import-tags').value),
       group: $('import-group').checked,
       runOcr: $('import-ocr').checked,
       language: $('ocr-lang').value.trim() || 'eng',
-    });
+    }));
     log(`Imported ${count} document(s)`);
     status(`${count} imported`);
     await refresh();
   } catch (e) {
+    if (/cancelled/i.test(String(e))) return;
     log(`Import failed: ${e}`);
     status('Import failed');
   } finally {
@@ -966,10 +990,10 @@ $('send-input').addEventListener('change', async (e) => {
 
 $('btn-export').addEventListener('click', async () => {
   try {
-    log(await invoke('export_bundle', {
+    log(await guarded(() => invoke('export_bundle', {
       name: $('bundle-name').value.trim() || 'panarchiv-export.parbundle',
-      ids: [], all: $('bundle-all').checked,
-    }));
+      ids: [], all: $('bundle-all').checked, tag: null,
+    })));
   } catch (e) { log(`Export failed: ${e}`); }
 });
 
@@ -979,24 +1003,302 @@ $('bundle-input').addEventListener('change', async (e) => {
   if (!file) return;
   try {
     const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
-    const count = await invoke('import_bundle', { name: file.name, bytes });
+    const count = await guarded(() => invoke('import_bundle', { name: file.name, bytes }));
     log(`Imported ${count} document(s) from bundle`);
     await refresh();
-  } catch (err) { log(`Bundle import failed: ${err}`); }
+  } catch (err) {
+    if (!/cancelled/i.test(String(err))) log(`Bundle import failed: ${err}`);
+  }
   finally { e.target.value = ''; }
 });
 
-/* ---------------------------------------------------------------- refresh */
+/* --------------------------------------------------------- unlock dialog */
+
+// The archive is encrypted, so a passphrase-protected archive cannot be
+// opened until the user supplies the passphrase. Every command that needs
+// the archive goes through `guarded`, which opens this dialog when the
+// backend reports that a passphrase is required.
+let unlockResolver = null;
+
+function isPassphraseError(e) {
+  const msg = String(e || '').toLowerCase();
+  return msg.includes('passphrase');
+}
+
+function showUnlockDialog(message) {
+  const modal = $('unlock');
+  if (!modal) return Promise.reject(new Error(message || 'Passphrase required'));
+  modal.hidden = false;
+  const err = $('unlock-error');
+  if (err) {
+    err.hidden = !message;
+    err.textContent = message || '';
+  }
+  const input = $('unlock-passphrase');
+  if (input) { input.value = ''; input.focus(); }
+  return new Promise((resolve, reject) => { unlockResolver = { resolve, reject }; });
+}
+
+function closeUnlockDialog() {
+  const modal = $('unlock');
+  if (modal) modal.hidden = true;
+}
+
+async function submitUnlock() {
+  const input = $('unlock-passphrase');
+  const passphrase = input ? input.value : '';
+  const err = $('unlock-error');
+  try {
+    await invoke('unlock_archive', { passphrase });
+    closeUnlockDialog();
+    log('Archive unlocked');
+    await refresh();
+    if (unlockResolver) unlockResolver.resolve();
+    unlockResolver = null;
+  } catch (e) {
+    if (err) { err.hidden = false; err.textContent = String(e); }
+    log(`Unlock failed: ${e}`);
+  }
+}
+
+/**
+ * Run a backend command, opening the unlock dialog if the archive turns
+ * out to be passphrase protected.
+ */
+async function guarded(fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (isPassphraseError(e)) {
+      await showUnlockDialog(String(e));
+      return fn();
+    }
+    throw e;
+  }
+}
+
+$('unlock-ok').addEventListener('click', submitUnlock);
+$('unlock-cancel').addEventListener('click', () => {
+  closeUnlockDialog();
+  if (unlockResolver) unlockResolver.reject(new Error('Unlock cancelled'));
+  unlockResolver = null;
+});
+$('unlock-passphrase').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') submitUnlock();
+});
+
+/* ------------------------------------------------------------- tag helpers */
+
+// Every tag used in the archive, for the datalists in the sync and share
+// panels. Sorted and de-duplicated.
+function allTags() {
+  const set = new Set();
+  for (const doc of allDocs) {
+    for (const tag of (doc.tags || [])) {
+      const t = String(tag).trim();
+      if (t) set.add(t);
+    }
+  }
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+function refreshTagLists() {
+  const tags = allTags();
+  const options = tags.map((t) => `<option value="${escapeHtml(t)}"></option>`).join('');
+  ['sync-tag-options', 'share-tag-options'].forEach((id) => {
+    const el = $(id);
+    if (el) el.innerHTML = options;
+  });
+}
+
+/* --------------------------------------------------------------- device sync */
+
+function showResult(id, message, kind) {
+  const el = $(id);
+  if (!el) return;
+  el.hidden = false;
+  el.className = `result ${kind || ''}`.trim();
+  el.textContent = message;
+}
+
+$('btn-sync').addEventListener('click', async () => {
+  const host = $('sync-host').value.trim();
+  if (!host) {
+    showResult('sync-result', 'Enter the address of the other device.', 'error');
+    $('sync-host').focus();
+    return;
+  }
+  const btn = $('btn-sync');
+  btn.disabled = true;
+  showResult('sync-result', 'Syncing…', '');
+  try {
+    status('Syncing…');
+    const result = await guarded(() => invoke('sync_with_peer', {
+      host,
+      port: Number($('sync-port').value) || 4242,
+      name: $('peer-name').value.trim() || 'panarchiv',
+      preferNewest: $('sync-prefer-newest').checked,
+      syncTags: $('sync-tags').checked,
+      tag: $('sync-tag').value.trim() || null,
+    }));
+    const msg = `Synced with ${result.peer}: ${result.received} file(s) received, ${result.sent} sent, ${result.tags_received} with tags`;
+    showResult('sync-result', msg, 'ok');
+    log(msg);
+    status('Sync complete');
+    await refresh();
+  } catch (e) {
+    showResult('sync-result', `Sync failed: ${e}`, 'error');
+    log(`Sync failed: ${e}`);
+    status('Sync failed');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('btn-sync-discover').addEventListener('click', async () => {
+  try {
+    const peers = await invoke('discover_peers', {
+      port: Number($('sync-port').value) || 4242, seconds: 3,
+    });
+    const root = $('sync-peers');
+    root.innerHTML = peers.length
+      ? peers.map((p) => {
+          const [host, port] = p.addr.split(':');
+          return `<div class="peer" data-host="${escapeHtml(host)}" data-port="${escapeHtml(port)}">${escapeHtml(p.name)} · ${escapeHtml(p.addr)}</div>`;
+        }).join('')
+      : '<span class="hint">No devices found. Make sure the other device has “Sharing” switched on.</span>';
+    root.querySelectorAll('.peer').forEach((el) => el.addEventListener('click', () => {
+      $('sync-host').value = el.dataset.host;
+      $('sync-port').value = el.dataset.port;
+      $('share-tag-host').value = el.dataset.host;
+      $('share-tag-port').value = el.dataset.port;
+    }));
+    log(`Found ${peers.length} device(s)`);
+  } catch (e) { log(`Discovery failed: ${e}`); }
+});
+
+/* ------------------------------------------------------------ share a tag */
+
+$('btn-share-tag-bundle').addEventListener('click', async () => {
+  const tag = $('share-tag').value.trim();
+  if (!tag) {
+    showResult('share-result', 'Choose a tag to share.', 'error');
+    $('share-tag').focus();
+    return;
+  }
+  try {
+    const name = $('share-tag-bundle-name').value.trim() || 'panarchiv-tag.parbundle';
+    const result = await guarded(() => invoke('export_bundle', {
+      name, ids: [], all: false, tag,
+    }));
+    showResult('share-result', result, 'ok');
+    log(result);
+  } catch (e) {
+    showResult('share-result', `Share failed: ${e}`, 'error');
+    log(`Share failed: ${e}`);
+  }
+});
+
+$('btn-share-tag-peer').addEventListener('click', async () => {
+  const tag = $('share-tag').value.trim();
+  const host = $('share-tag-host').value.trim();
+  if (!tag) {
+    showResult('share-result', 'Choose a tag to share.', 'error');
+    $('share-tag').focus();
+    return;
+  }
+  if (!host) {
+    showResult('share-result', 'Enter the address of the other device.', 'error');
+    $('share-tag-host').focus();
+    return;
+  }
+  const btn = $('btn-share-tag-peer');
+  btn.disabled = true;
+  showResult('share-result', `Sharing “${tag}”…`, '');
+  try {
+    const result = await guarded(() => invoke('share_tag_with_peer', {
+      host,
+      port: Number($('share-tag-port').value) || 4242,
+      name: $('peer-name').value.trim() || 'panarchiv',
+      tag,
+    }));
+    const msg = `Shared “${tag}” with ${result.peer}: ${result.sent} file(s) sent`;
+    showResult('share-result', msg, 'ok');
+    log(msg);
+    status('Tag shared');
+  } catch (e) {
+    showResult('share-result', `Share failed: ${e}`, 'error');
+    log(`Share failed: ${e}`);
+    status('Share failed');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/* ------------------------------------------------- encryption & storage */
+
+$('btn-storage-info').addEventListener('click', async () => {
+  try {
+    const info = await guarded(() => invoke('archive_info'));
+    archiveInfo = info;
+    const el = $('archive-info');
+    el.hidden = false;
+    const tagLine = info.tags.length
+      ? info.tags.map((t) => `${escapeHtml(t.tag)} (${t.count})`).join(', ')
+      : 'no tags yet';
+    el.innerHTML = `
+      <div><b>Location</b><br /><code>${escapeHtml(info.root)}</code></div>
+      <div><b>Documents</b> ${info.document_count}</div>
+      <div><b>Passphrase</b> ${info.passphrase_protected ? 'enabled' : 'not set'}</div>
+      <div><b>Tags</b> ${tagLine}</div>`;
+    refreshTagLists();
+  } catch (e) {
+    log(`Could not read the archive info: ${e}`);
+  }
+});
+
+$('btn-set-passphrase').addEventListener('click', async () => {
+  const input = $('archive-passphrase');
+  const passphrase = input ? input.value : '';
+  if (!passphrase) {
+    log('Enter a passphrase first');
+    if (input) input.focus();
+    return;
+  }
+  try {
+    const result = await guarded(() => invoke('set_passphrase', { passphrase }));
+    log(result);
+    if (input) input.value = '';
+    $('archive-info').hidden = true;
+  } catch (e) {
+    log(`Could not set the passphrase: ${e}`);
+  }
+});
+
+$('btn-remove-passphrase').addEventListener('click', async () => {
+  try {
+    const result = await guarded(() => invoke('set_passphrase', { passphrase: null }));
+    log(result);
+    $('archive-info').hidden = true;
+  } catch (e) {
+    log(`Could not remove the passphrase: ${e}`);
+  }
+});
+
+/* --------------------------------------------------------------- refresh */
 
 async function refresh() {
   try {
-    const docs = await invoke('get_documents');
+    const docs = await guarded(() => invoke('get_documents'));
     allDocs = docs || [];
     renderTree();
     renderFiles();
     renderBreadcrumb();
+    refreshTagLists();
   } catch (e) {
-    log(`Load failed: ${e}`);
+    if (!isPassphraseError(e) && !/cancelled/i.test(String(e))) {
+      log(`Load failed: ${e}`);
+    }
   }
 }
 

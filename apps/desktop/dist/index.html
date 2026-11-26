@@ -117,6 +117,61 @@
         </div>
       </section>
 
+      <section class="tool" data-tool="sync">
+        <button class="tool-head" type="button"><span class="chev">&#9656;</span><h2>Device sync</h2></button>
+        <div class="tool-body">
+          <p class="hint">Compare this device with another one and exchange the files and tags you are missing. Start &ldquo;Sharing&rdquo; on the other device first.</p>
+          <label>Peer host<input id="sync-host" type="text" placeholder="192.168.1.20" /></label>
+          <label>Port<input id="sync-port" type="number" value="4242" min="1" max="65535" /></label>
+          <label class="check"><input id="sync-prefer-newest" type="checkbox" /> Select newest version when a file differs</label>
+          <label class="check"><input id="sync-tags" type="checkbox" checked /> Sync titles and tags</label>
+          <label>Only this tag (optional)<input id="sync-tag" type="text" placeholder="finance" list="sync-tag-options" /></label>
+          <datalist id="sync-tag-options"></datalist>
+          <div class="row">
+            <button id="btn-sync" class="primary small">Sync now</button>
+            <button id="btn-sync-discover" class="small">Find devices</button>
+          </div>
+          <div id="sync-peers" class="peers"></div>
+          <div id="sync-result" class="result" hidden></div>
+        </div>
+      </section>
+
+      <section class="tool" data-tool="share-tag">
+        <button class="tool-head" type="button"><span class="chev">&#9656;</span><h2>Share a tag</h2></button>
+        <div class="tool-body">
+          <p class="hint">Share every document carrying a tag &mdash; either as a bundle file or straight to another device on the network.</p>
+          <label>Tag<input id="share-tag" type="text" placeholder="finance" list="share-tag-options" /></label>
+          <datalist id="share-tag-options"></datalist>
+          <label>Bundle filename<input id="share-tag-bundle-name" type="text" value="panarchiv-tag.parbundle" /></label>
+          <div class="row">
+            <button id="btn-share-tag-bundle" class="small">Export tag as bundle</button>
+          </div>
+          <label>Peer host<input id="share-tag-host" type="text" placeholder="192.168.1.20" /></label>
+          <label>Port<input id="share-tag-port" type="number" value="4242" min="1" max="65535" /></label>
+          <div class="row">
+            <button id="btn-share-tag-peer" class="small">Send tag to device</button>
+          </div>
+          <div id="share-result" class="result" hidden></div>
+        </div>
+      </section>
+
+      <section class="tool" data-tool="security">
+        <button class="tool-head" type="button"><span class="chev">&#9656;</span><h2>Encryption & storage</h2></button>
+        <div class="tool-body">
+          <p class="hint">Your documents are always encrypted at rest and kept in the app&rsquo;s own private storage directory &mdash; never next to the executable.</p>
+          <div class="row">
+            <button id="btn-storage-info" class="small">Show storage location</button>
+          </div>
+          <div id="archive-info" class="info-box" hidden></div>
+          <label>New passphrase<input id="archive-passphrase" type="password" autocomplete="off" placeholder="Protect the archive key" /></label>
+          <div class="row">
+            <button id="btn-set-passphrase" class="small">Apply passphrase</button>
+            <button id="btn-remove-passphrase" class="small">Remove</button>
+          </div>
+          <p class="hint">A passphrase wraps the archive key with Argon2id. The passphrase itself is never written to disk.</p>
+        </div>
+      </section>
+
       <section class="tool" data-tool="bundles">
         <button class="tool-head" type="button"><span class="chev">&#9656;</span><h2>Offline bundles</h2></button>
         <div class="tool-body">
@@ -135,6 +190,20 @@
         <div id="log" class="log"></div>
       </div>
     </aside>
+  </div>
+
+  <!-- Unlock dialog: shown when the archive is protected by a passphrase -->
+  <div id="unlock" class="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="unlock-title">
+      <h2 id="unlock-title">Unlock archive</h2>
+      <p class="hint">This archive is protected by a passphrase. Enter it to continue.</p>
+      <input id="unlock-passphrase" type="password" autocomplete="off" placeholder="Passphrase" />
+      <p id="unlock-error" class="error-text" hidden></p>
+      <div class="row modal-actions">
+        <button id="unlock-cancel" class="small">Cancel</button>
+        <button id="unlock-ok" class="primary small">Unlock</button>
+      </div>
+    </div>
   </div>
 
   <script src="src/main.js"></script>

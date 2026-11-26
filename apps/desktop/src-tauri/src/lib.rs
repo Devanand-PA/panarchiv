@@ -6,15 +6,18 @@ use std::path::{Path, PathBuf};
 #[cfg(not(target_os = "android"))]
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use panarchiv_core::archive::AddOptions;
 use panarchiv_core::bundle;
 use panarchiv_core::ocr::{default_engine, recognize_item};
 use panarchiv_core::p2p;
+use panarchiv_core::paths;
+use panarchiv_core::sync::{self, SyncOptions};
 use panarchiv_core::{Archive, ArchiveItem, Document};
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager};
 
 #[cfg(target_os = "android")]
 use jni::objects::{JClass, JObject, JString, JValue};
@@ -26,13 +29,56 @@ use ndk_context::android_context;
 struct AppState {
     server_stop: Arc<AtomicBool>,
     server_running: Arc<AtomicBool>,
+    /// The passphrase protecting the archive key, kept in memory for the
+    /// lifetime of the process. It is never written to disk.
+    passphrase: Arc<Mutex<Option<String>>>,
 }
 
-fn archive_root() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".panarchiv")
-        .join("archive")
+/// The app's dedicated per-platform storage directory.
+///
+/// Tauri maps `app_data_dir()` to the right place on every platform:
+///
+/// | Platform | Location |
+/// |----------|----------|
+/// | Linux    | `$XDG_DATA_HOME/com.panarchiv.app` |
+/// | macOS    | `~/Library/Application Support/com.panarchiv.app` |
+/// | Windows  | `%APPDATA%\com.panarchiv.app` |
+/// | Android  | the app's private storage (per-app isolation) |
+///
+/// This matters for AppImages, which run from a read-only squashfs mount
+/// and can be launched from an arbitrary working directory: writing next
+/// to the executable or relative to the current directory either fails or
+/// scatters the user's documents across the filesystem.
+fn archive_root(app: &AppHandle) -> Result<PathBuf, String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("could not resolve the app data directory: {e}"))?;
+    Ok(paths::app_root(&base))
+}
+
+/// Move an archive from the old `~/.panarchiv` location into the app's
+/// dedicated directory, so upgrading users keep their documents.
+fn migrate_legacy_archive(app: &AppHandle) -> Result<(), String> {
+    let root = archive_root(app)?;
+    // Best effort: a failed migration must never stop the app from
+    // starting, the user can still import their files again.
+    let _ = paths::migrate_legacy(&root);
+    Ok(())
+}
+
+/// Open the archive, using the passphrase from the app state when the
+/// archive needs one.
+fn open_archive(app: &AppHandle) -> Result<Archive, String> {
+    let root = archive_root(app)?;
+    let passphrase = app
+        .try_state::<AppState>()
+        .and_then(|s| s.passphrase.lock().ok().and_then(|p| p.clone()));
+    Archive::open_with_passphrase(&root, passphrase.as_deref()).map_err(|e| {
+        // The archive is encrypted, so a missing passphrase is a normal,
+        // recoverable situation the UI has to ask about.
+        format!("{e}")
+    })
 }
 
 fn err<E: std::fmt::Display>(e: E) -> String {
@@ -51,12 +97,38 @@ pub struct PeerDto {
     pub addr: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ArchiveInfoDto {
+    /// Where the archive lives on disk.
+    pub root: String,
+    /// True when the archive's key is protected by a passphrase.
+    pub passphrase_protected: bool,
+    /// Every tag in the archive with the number of documents carrying it.
+    pub tags: Vec<TagCountDto>,
+    /// Number of documents in the archive.
+    pub document_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TagCountDto {
+    pub tag: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SyncResultDto {
+    pub peer: String,
+    pub sent: usize,
+    pub received: usize,
+    pub tags_received: usize,
+}
+
 fn safe_name(name: &str) -> String {
     name.replace(['/', '\\', '\0'], "_")
 }
 
-fn materialize(files: &[FilePayload]) -> Result<(PathBuf, Vec<(PathBuf, String)>), String> {
-    let archive = Archive::open(archive_root()).map_err(err)?;
+fn materialize(app: &AppHandle, files: &[FilePayload]) -> Result<(PathBuf, Vec<(PathBuf, String)>), String> {
+    let archive = open_archive(app)?;
     let dir = archive
         .root()
         .join("incoming")
@@ -493,19 +565,90 @@ fn android_open_chooser(archive: &Archive, doc_id: &str, item: &ArchiveItem) -> 
 }
 
 #[tauri::command]
-fn get_documents() -> Result<Vec<Document>, String> {
-    let archive = Archive::open(archive_root()).map_err(err)?;
+fn get_documents(app: AppHandle) -> Result<Vec<Document>, String> {
+    let archive = open_archive(&app)?;
     Ok(archive.list().to_vec())
 }
 
 #[tauri::command]
-fn search_documents(query: String) -> Result<Vec<Document>, String> {
-    let archive = Archive::open(archive_root()).map_err(err)?;
+fn search_documents(app: AppHandle, query: String) -> Result<Vec<Document>, String> {
+    let archive = open_archive(&app)?;
     Ok(archive.search(&query).into_iter().cloned().collect())
+}
+
+/// Information about the archive: where it lives, whether it is protected
+/// by a passphrase and which tags it holds.
+#[tauri::command]
+fn archive_info(app: AppHandle) -> Result<ArchiveInfoDto, String> {
+    let archive = open_archive(&app)?;
+    Ok(ArchiveInfoDto {
+        root: archive.root().display().to_string(),
+        passphrase_protected: archive.is_passphrase_protected(),
+        tags: archive
+            .tags()
+            .into_iter()
+            .map(|(tag, count)| TagCountDto { tag, count })
+            .collect(),
+        document_count: archive.list().len(),
+    })
+}
+
+/// Unlock the archive with a passphrase.
+///
+/// The passphrase is checked against the archive key before it is accepted,
+/// and it is kept in memory only — it is never written to disk.
+#[tauri::command]
+fn unlock_archive(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    passphrase: String,
+) -> Result<(), String> {
+    let root = archive_root(&app)?;
+    Archive::open_with_passphrase(&root, Some(&passphrase)).map_err(err)?;
+    if let Ok(mut slot) = state.passphrase.lock() {
+        *slot = Some(passphrase);
+    }
+    Ok(())
+}
+
+/// Protect the archive with a passphrase, or remove the protection when
+/// `passphrase` is empty.
+///
+/// The passphrase itself is never written to disk — only the wrapped key is.
+#[tauri::command]
+fn set_passphrase(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    passphrase: Option<String>,
+) -> Result<String, String> {
+    let new_pass = passphrase
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty());
+
+    // Open the archive with the *current* passphrase first, so the user
+    // has to prove they know the existing one before changing it.
+    let root = archive_root(&app)?;
+    let current = state
+        .passphrase
+        .lock()
+        .ok()
+        .and_then(|p| p.clone());
+    let mut archive = Archive::open_with_passphrase(&root, current.as_deref()).map_err(err)?;
+    archive.set_passphrase(new_pass.as_deref()).map_err(err)?;
+
+    if let Ok(mut slot) = state.passphrase.lock() {
+        *slot = new_pass.clone();
+    }
+
+    Ok(match new_pass {
+        Some(_) => "The archive is now protected by a passphrase.".to_string(),
+        None => "The archive passphrase protection was removed.".to_string(),
+    })
 }
 
 #[tauri::command]
 fn import_files(
+    app: AppHandle,
     files: Vec<FilePayload>,
     title: Option<String>,
     tags: Vec<String>,
@@ -513,9 +656,9 @@ fn import_files(
     run_ocr: bool,
     language: String,
 ) -> Result<usize, String> {
-    let (dir, written) = materialize(&files)?;
+    let (dir, written) = materialize(&app, &files)?;
     let paths: Vec<PathBuf> = written.iter().map(|(p, _)| p.clone()).collect();
-    let mut archive = Archive::open(archive_root()).map_err(err)?;
+    let mut archive = open_archive(&app)?;
     let docs = archive
         .add_files(&paths, &AddOptions { title, tags, group })
         .map_err(err)?;
@@ -544,8 +687,8 @@ fn import_files(
 }
 
 #[tauri::command]
-fn run_ocr(doc: String, item: String, language: String) -> Result<String, String> {
-    let mut archive = Archive::open(archive_root()).map_err(err)?;
+fn run_ocr(app: AppHandle, doc: String, item: String, language: String) -> Result<String, String> {
+    let mut archive = open_archive(&app)?;
     let engine = default_engine();
     let result =
         recognize_item(&mut archive, &doc, &item, engine.as_ref(), &language).map_err(err)?;
@@ -553,21 +696,22 @@ fn run_ocr(doc: String, item: String, language: String) -> Result<String, String
 }
 
 #[tauri::command]
-fn remove_document(id: String) -> Result<(), String> {
-    let mut archive = Archive::open(archive_root()).map_err(err)?;
+fn remove_document(app: AppHandle, id: String) -> Result<(), String> {
+    let mut archive = open_archive(&app)?;
     archive.remove_document(&id).map_err(err)
 }
 
 /// Replace the tag list of a document. Blank tags are dropped and
 /// duplicates are collapsed, preserving the order the user supplied.
 #[tauri::command]
-fn update_document_tags(id: String, tags: Vec<String>) -> Result<(), String> {
-    let mut archive = Archive::open(archive_root()).map_err(err)?;
+fn update_document_tags(app: AppHandle, id: String, tags: Vec<String>) -> Result<(), String> {
+    let mut archive = open_archive(&app)?;
     archive.set_tags(&id, tags).map_err(err)
 }
 
 #[tauri::command]
 fn start_server(
+    app: AppHandle,
     state: tauri::State<'_, AppState>,
     port: u16,
     name: String,
@@ -577,9 +721,10 @@ fn start_server(
     }
     state.server_stop.store(false, Ordering::SeqCst);
     let stop = state.server_stop.clone();
-    let root = archive_root();
+    let root = archive_root(&app)?;
+    let passphrase = state.passphrase.lock().ok().and_then(|p| p.clone());
     std::thread::spawn(move || {
-        if let Err(e) = p2p::serve_with_stop(root, port, name, vec![], stop) {
+        if let Err(e) = p2p::serve_with_stop(root, port, name, vec![], stop, passphrase) {
             eprintln!("server error: {e}");
         }
     });
@@ -610,12 +755,13 @@ fn discover_peers(port: u16, seconds: u64) -> Result<Vec<PeerDto>, String> {
 
 #[tauri::command]
 fn send_to_peer(
+    app: AppHandle,
     host: String,
     port: u16,
     name: String,
     files: Vec<FilePayload>,
 ) -> Result<String, String> {
-    let (dir, written) = materialize(&files)?;
+    let (dir, written) = materialize(&app, &files)?;
     let paths: Vec<PathBuf> = written.iter().map(|(p, _)| p.clone()).collect();
     let addr = p2p::resolve_addr(&host, port).map_err(err)?;
     let receipt = p2p::send_files(addr, &paths, &name).map_err(err)?;
@@ -626,20 +772,105 @@ fn send_to_peer(
     ))
 }
 
+/// Synchronise files and tags with another device on the network.
+///
+/// `prefer_newest` makes the device keep the newer of two versions of the
+/// same file and send it to the device that is missing it. `tag` narrows
+/// the exchange to the documents carrying that tag.
 #[tauri::command]
-fn export_bundle(name: String, ids: Vec<String>, all: bool) -> Result<String, String> {
-    let archive = Archive::open(archive_root()).map_err(err)?;
-    let selection = if all {
-        None
-    } else if ids.is_empty() {
-        return Err("no documents selected".to_string());
-    } else {
-        Some(ids.as_slice())
+fn sync_with_peer(
+    app: AppHandle,
+    host: String,
+    port: u16,
+    name: String,
+    prefer_newest: bool,
+    sync_tags: bool,
+    tag: Option<String>,
+) -> Result<SyncResultDto, String> {
+    let addr = p2p::resolve_addr(&host, port).map_err(err)?;
+    let mut archive = open_archive(&app)?;
+    let options = SyncOptions {
+        prefer_newest,
+        sync_tags,
+        tag_filter: tag.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
+        share_only: false,
     };
+    let summary = sync::sync_with_peer(addr, &mut archive, &name, &options).map_err(err)?;
+    Ok(SyncResultDto {
+        peer: summary.peer_name,
+        sent: summary.sent,
+        received: summary.received,
+        tags_received: summary.tags_received,
+    })
+}
+
+/// Share every document carrying a tag with another device.
+///
+/// This is a one-way push: the other device receives the whole tag, with
+/// the titles and tags intact, and nothing is sent back.
+#[tauri::command]
+fn share_tag_with_peer(
+    app: AppHandle,
+    host: String,
+    port: u16,
+    name: String,
+    tag: String,
+) -> Result<SyncResultDto, String> {
+    let tag = tag.trim().to_string();
+    if tag.is_empty() {
+        return Err("no tag given".to_string());
+    }
+    let addr = p2p::resolve_addr(&host, port).map_err(err)?;
+    let mut archive = open_archive(&app)?;
+    let matching = archive
+        .list()
+        .iter()
+        .filter(|d| d.tags.iter().any(|t| t.eq_ignore_ascii_case(&tag)))
+        .count();
+    if matching == 0 {
+        return Err(format!("no documents tagged '{tag}'"));
+    }
+    let options = SyncOptions::share_tag(tag.clone());
+    let summary = sync::sync_with_peer(addr, &mut archive, &name, &options).map_err(err)?;
+    Ok(SyncResultDto {
+        peer: summary.peer_name,
+        sent: summary.sent,
+        received: summary.received,
+        tags_received: summary.tags_received,
+    })
+}
+
+/// Export documents to a bundle file inside the archive's `exports`
+/// directory.
+///
+/// When `tag` is given, every document carrying that tag is exported —
+/// this is how a user shares an *entire tag* as a single file.
+#[tauri::command]
+fn export_bundle(
+    app: AppHandle,
+    name: String,
+    ids: Vec<String>,
+    all: bool,
+    tag: Option<String>,
+) -> Result<String, String> {
+    let archive = open_archive(&app)?;
     let exports = archive.root().join("exports");
     fs::create_dir_all(&exports).map_err(err)?;
     let dest = exports.join(safe_name(&name));
-    let count = bundle::export_bundle(&archive, selection, &dest).map_err(err)?;
+
+    let count = match tag.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
+        Some(tag) => bundle::export_bundle_by_tag(&archive, &tag, &dest, None).map_err(err)?,
+        None => {
+            let selection = if all {
+                None
+            } else if ids.is_empty() {
+                return Err("no documents selected".to_string());
+            } else {
+                Some(ids.as_slice())
+            };
+            bundle::export_bundle(&archive, selection, &dest, None).map_err(err)?
+        }
+    };
     Ok(format!(
         "Exported {count} document(s) to {}",
         dest.display()
@@ -647,12 +878,12 @@ fn export_bundle(name: String, ids: Vec<String>, all: bool) -> Result<String, St
 }
 
 #[tauri::command]
-fn import_bundle(name: String, bytes: Vec<u8>) -> Result<usize, String> {
-    let archive = Archive::open(archive_root()).map_err(err)?;
+fn import_bundle(app: AppHandle, name: String, bytes: Vec<u8>) -> Result<usize, String> {
+    let archive = open_archive(&app)?;
     let path = archive.root().join("incoming").join(safe_name(&name));
     fs::write(&path, &bytes).map_err(err)?;
-    let mut archive = Archive::open(archive_root()).map_err(err)?;
-    let ids = bundle::import_bundle(&mut archive, &path).map_err(err)?;
+    let mut archive = open_archive(&app)?;
+    let ids = bundle::import_bundle(&mut archive, &path, None).map_err(err)?;
     let _ = fs::remove_file(&path);
     Ok(ids.len())
 }
@@ -665,8 +896,8 @@ fn import_bundle(name: String, bytes: Vec<u8>) -> Result<usize, String> {
 /// instead (see [`android_open_chooser`]).
 #[tauri::command]
 #[cfg_attr(target_os = "android", allow(unused_variables))]
-fn open_item(doc: String, item: String, program: Option<String>) -> Result<(), String> {
-    let archive = Archive::open(archive_root()).map_err(err)?;
+fn open_item(app: AppHandle, doc: String, item: String, program: Option<String>) -> Result<(), String> {
+    let archive = open_archive(&app)?;
     let document = archive
         .get(&doc)
         .ok_or_else(|| "document not found".to_string())?;
@@ -690,8 +921,8 @@ fn open_item(doc: String, item: String, program: Option<String>) -> Result<(), S
 /// Materialise an item and reveal it in the OS file manager. On Android there
 /// is no "reveal" concept, so this falls back to opening the chooser.
 #[tauri::command]
-fn reveal_item(doc: String, item: String) -> Result<(), String> {
-    let archive = Archive::open(archive_root()).map_err(err)?;
+fn reveal_item(app: AppHandle, doc: String, item: String) -> Result<(), String> {
+    let archive = open_archive(&app)?;
     let document = archive
         .get(&doc)
         .ok_or_else(|| "document not found".to_string())?;
@@ -715,22 +946,33 @@ fn reveal_item(doc: String, item: String) -> Result<(), String> {
 /// Return an image thumbnail for a blob hash as a base64 data URL, or `None`
 /// when no thumbnail exists (non-image or not yet generated).
 #[tauri::command]
-fn read_thumb(hash: String) -> Option<String> {
-    let archive = Archive::open(archive_root()).ok()?;
-    let bytes = fs::read(archive.thumb_path(&hash)).ok()?;
+fn read_thumb(app: AppHandle, hash: String) -> Option<String> {
+    let archive = open_archive(&app).ok()?;
+    // Thumbnails are encrypted at rest just like the documents.
+    let bytes = archive.read_thumb(&hash).ok()?;
     Some(format!("data:image/png;base64,{}", base64(&bytes)))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            // Move an archive from the old `~/.panarchiv` location into the
+            // app's dedicated directory.
+            migrate_legacy_archive(app.handle())?;
+            Ok(())
+        })
         .manage(AppState {
             server_stop: Arc::new(AtomicBool::new(false)),
             server_running: Arc::new(AtomicBool::new(false)),
+            passphrase: Arc::new(Mutex::new(None)),
         })
         .invoke_handler(tauri::generate_handler![
             get_documents,
             search_documents,
+            archive_info,
+            unlock_archive,
+            set_passphrase,
             import_files,
             run_ocr,
             remove_document,
@@ -739,6 +981,8 @@ pub fn run() {
             stop_server,
             discover_peers,
             send_to_peer,
+            sync_with_peer,
+            share_tag_with_peer,
             export_bundle,
             import_bundle,
             open_item,

@@ -130,7 +130,10 @@ pub fn recognize_item(
         .map(|e| e.to_string_lossy().into_owned())
         .unwrap_or_else(|| "png".to_string());
     let tmp = std::env::temp_dir().join(format!("panarchiv-ocr-{}.{}", uuid::Uuid::new_v4(), ext));
-    std::fs::copy(archive.blob_path(&item.blob), &tmp)?;
+    // The blob is encrypted at rest, so it has to be decrypted before the
+    // OCR engine can look at it.
+    let plaintext = archive.read_blob(&item.blob)?;
+    std::fs::write(&tmp, &plaintext)?;
 
     let text = engine.recognize(&tmp, language);
     let _ = std::fs::remove_file(&tmp);
