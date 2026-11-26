@@ -1,0 +1,217 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: Build Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            apps/desktop/src-tauri -> apps/desktop/src-tauri/target
+
+      - name: Install WebKitGTK and GTK development packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libfuse2
+
+      - name: Install frontend tooling
+        working-directory: apps/desktop
+        run: npm install
+
+      - name: Build CLI
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
+        run: cargo build --release -p panarchiv-cli
+
+      - name: Build Tauri installers
+        working-directory: apps/desktop
+        env:
+          CI: "true"
+        run: npx tauri build
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p dist
+          cp target/release/panarchiv dist/panarchiv-linux-x86_64
+          cp -r apps/desktop/src-tauri/target/release/bundle/* dist/
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: panarchiv-linux
+          path: dist/
+          if-no-files-found: error
+
+  windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            apps/desktop/src-tauri -> apps/desktop/src-tauri/target
+
+      - name: Install frontend tooling
+        working-directory: apps/desktop
+        run: npm install
+
+      - name: Build CLI
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
+        run: cargo build --release -p panarchiv-cli
+
+      - name: Build Tauri installer
+        working-directory: apps/desktop
+        env:
+          CI: "true"
+        run: npx tauri build
+
+      - name: Stage artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target\release\panarchiv.exe dist\panarchiv-windows-x86_64.exe
+          Copy-Item apps\desktop\src-tauri\target\release\bundle\*\* dist\
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: panarchiv-windows
+          path: dist/
+          if-no-files-found: error
+
+  macos:
+    name: Build macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            apps/desktop/src-tauri -> apps/desktop/src-tauri/target
+
+      - name: Install frontend tooling
+        working-directory: apps/desktop
+        run: npm install
+
+      - name: Build CLI
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
+        run: cargo build --release -p panarchiv-cli
+
+      - name: Build Tauri installer
+        working-directory: apps/desktop
+        env:
+          CI: "true"
+        run: npx tauri build
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p dist
+          cp target/release/panarchiv dist/panarchiv-macos-aarch64
+          cp -r apps/desktop/src-tauri/target/release/bundle/* dist/
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: panarchiv-macos
+          path: dist/
+          if-no-files-found: error
+
+  android:
+    name: Build Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, i686-linux-android, x86_64-linux-android
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            apps/desktop/src-tauri -> apps/desktop/src-tauri/target
+
+      - name: Install frontend tooling
+        working-directory: apps/desktop
+        run: npm install
+
+      - name: Generate Android project
+        working-directory: apps/desktop
+        env:
+          CI: "true"
+        run: npx tauri android init --ci
+
+      - name: Build Android APKs
+        working-directory: apps/desktop
+        env:
+          CI: "true"
+        run: npx tauri android build --ci --apk
+
+      - name: Stage APKs
+        run: mkdir -p dist && cp -r apps/desktop/src-tauri/gen/android/app/build/outputs/apk/* dist/
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: panarchiv-android
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [linux, windows, macos, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: false
+          files: dist/**/*
+          fail_on_unmatched_files: false
