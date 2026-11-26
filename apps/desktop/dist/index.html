@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Panarchiv</title>
+  <link rel="stylesheet" href="src/styles.css" />
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="logo">P</span><div><h1>Panarchiv</h1><p>Your documents, everywhere</p></div></div>
+    <div id="status" class="status">Ready</div>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>Import</h2>
+      <div class="grid">
+        <label>Document title (optional)
+          <input id="import-title" type="text" placeholder="e.g. Tax records 2026" />
+        </label>
+        <label>Tags (comma separated)
+          <input id="import-tags" type="text" placeholder="finance, receipts" />
+        </label>
+        <label class="check"><input id="import-group" type="checkbox" /> Combine into one document</label>
+        <label class="check"><input id="import-ocr" type="checkbox" /> Run OCR on images</label>
+        <label>Language
+          <input id="ocr-lang" type="text" value="eng" />
+        </label>
+      </div>
+      <div class="row">
+        <input id="file-input" type="file" multiple hidden />
+        <button id="btn-files" class="primary">Add files</button>
+        <input id="folder-input" type="file" webkitdirectory directory multiple hidden />
+        <button id="btn-folder">Add folder</button>
+        <input id="camera-input" type="file" accept="image/*" capture="environment" multiple hidden />
+        <button id="btn-camera">Capture photo</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="section-head">
+        <h2>Archive</h2>
+        <input id="search" type="search" placeholder="Search titles, tags, filenames, OCR text..." />
+      </div>
+      <div id="documents" class="documents"></div>
+    </section>
+
+    <section class="card">
+      <h2>Peer to peer</h2>
+      <div class="grid">
+        <label>Device name<input id="peer-name" type="text" value="My panarchiv" /></label>
+        <label>Port<input id="peer-port" type="number" value="4242" min="1" max="65535" /></label>
+        <button id="btn-start">Start sharing</button>
+        <button id="btn-stop" disabled>Stop sharing</button>
+        <button id="btn-discover">Find peers</button>
+      </div>
+      <div id="peers" class="peers"></div>
+      <div class="grid">
+        <label>Send to host<input id="send-host" type="text" placeholder="192.168.1.20" /></label>
+        <label>Port<input id="send-port" type="number" value="4242" /></label>
+        <input id="send-input" type="file" multiple hidden />
+        <button id="btn-send">Choose files & send</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Offline bundles</h2>
+      <div class="grid">
+        <label>Bundle filename<input id="bundle-name" type="text" value="panarchiv-export.parbundle" /></label>
+        <label class="check"><input id="bundle-all" type="checkbox" checked /> Include all documents</label>
+        <button id="btn-export">Export bundle</button>
+        <input id="bundle-input" type="file" accept=".parbundle" hidden />
+        <button id="btn-import-bundle">Import bundle</button>
+      </div>
+      <p class="hint">Exported bundles are saved under ~/.panarchiv/archive/exports (or the app's home directory on Android).</p>
+    </section>
+
+    <div id="log" class="log"></div>
+  </main>
+
+  <script src="src/main.js"></script>
+</body>
+</html>

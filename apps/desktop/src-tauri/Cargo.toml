@@ -1,0 +1,19 @@
+[package]
+name = "panarchiv-app"
+description = "Panarchiv desktop and mobile GUI"
+version = "0.1.0"
+edition = "2021"
+authors = ["Devanand P A"]
+license = "MIT"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+panarchiv-core = { path = "../../../crates/panarchiv-core" }

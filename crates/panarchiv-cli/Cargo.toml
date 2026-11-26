@@ -1,0 +1,19 @@
+[package]
+name = "panarchiv-cli"
+description = "Command-line interface for panarchiv"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "panarchiv"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+dirs.workspace = true
+panarchiv-core.workspace = true

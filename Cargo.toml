@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/panarchiv-core",
+    "crates/panarchiv-cli",
+]
+exclude = ["apps/desktop/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Devanand P A"]
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+walkdir = "2"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+tar = "0.4"
+flate2 = "1"
+dirs = "6"
+clap = { version = "4", features = ["derive"] }
+
+panarchiv-core = { path = "crates/panarchiv-core" }

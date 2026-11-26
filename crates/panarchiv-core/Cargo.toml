@@ -1,0 +1,21 @@
+[package]
+name = "panarchiv-core"
+description = "Core library for the panarchiv document archiver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+walkdir.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+image.workspace = true
+tar.workspace = true
+flate2.workspace = true
+dirs.workspace = true
