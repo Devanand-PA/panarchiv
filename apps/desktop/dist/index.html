@@ -6,78 +6,135 @@
   <title>Panarchiv</title>
   <link rel="stylesheet" href="src/styles.css" />
 </head>
-<body>
+<body class="show-left show-right">
   <header>
-    <div class="brand"><span class="logo">P</span><div><h1>Panarchiv</h1><p>Your documents, everywhere</p></div></div>
+    <button id="toggle-left" class="icon-btn" title="Toggle directories" aria-label="Toggle directories">&#9776;</button>
+    <div class="brand">
+      <span class="logo">P</span>
+      <div class="brand-text"><h1>Panarchiv</h1><p>Your documents, everywhere</p></div>
+    </div>
+    <div class="search-wrap">
+      <input id="search" type="search" placeholder="Search titles, tags, filenames, OCR text&#8230;" />
+    </div>
     <div id="status" class="status">Ready</div>
+    <button id="toggle-right" class="icon-btn" title="Toggle tools" aria-label="Toggle tools">&#9881;</button>
   </header>
 
-  <main>
-    <section class="card">
-      <h2>Import</h2>
-      <div class="grid">
-        <label>Document title (optional)
-          <input id="import-title" type="text" placeholder="e.g. Tax records 2026" />
-        </label>
-        <label>Tags (comma separated)
-          <input id="import-tags" type="text" placeholder="finance, receipts" />
-        </label>
-        <label class="check"><input id="import-group" type="checkbox" /> Combine into one document</label>
-        <label class="check"><input id="import-ocr" type="checkbox" /> Run OCR on images</label>
-        <label>Language
-          <input id="ocr-lang" type="text" value="eng" />
-        </label>
+  <div class="layout">
+    <!-- LEFT: directory tree -->
+    <aside id="left" class="sidebar left">
+      <div class="sidebar-head">
+        <h2>Directories</h2>
+        <button id="nav-all" class="link-btn">All files</button>
       </div>
-      <div class="row">
-        <input id="file-input" type="file" multiple hidden />
-        <button id="btn-files" class="primary">Add files</button>
-        <input id="folder-input" type="file" webkitdirectory directory multiple hidden />
-        <button id="btn-folder">Add folder</button>
-        <input id="camera-input" type="file" accept="image/*" capture="environment" multiple hidden />
-        <button id="btn-camera">Capture photo</button>
-      </div>
-    </section>
+      <nav id="tree" class="tree" aria-label="Directory tree"></nav>
+    </aside>
 
-    <section class="card">
-      <div class="section-head">
-        <h2>Archive</h2>
-        <input id="search" type="search" placeholder="Search titles, tags, filenames, OCR text..." />
+    <!-- CENTER: files -->
+    <main class="content">
+      <div class="toolbar">
+        <nav id="breadcrumb" class="breadcrumb"></nav>
+        <div class="toolbar-spacer"></div>
+        <select id="sort" class="mini-select" title="Sort by" aria-label="Sort by">
+          <option value="name">Name</option>
+          <option value="date">Recently updated</option>
+          <option value="files">Files</option>
+          <option value="size">Size</option>
+        </select>
+        <div class="view-toggle" role="group" aria-label="View mode">
+          <button id="view-grid" class="seg active" title="Grid view">&#9636;</button>
+          <button id="view-list" class="seg" title="List view">&#9776;</button>
+        </div>
+        <button id="btn-import-top" class="primary small">+ Import</button>
       </div>
-      <div id="documents" class="documents"></div>
-    </section>
+      <div id="files" class="files grid"></div>
+    </main>
 
-    <section class="card">
-      <h2>Peer to peer</h2>
-      <div class="grid">
-        <label>Device name<input id="peer-name" type="text" value="My panarchiv" /></label>
-        <label>Port<input id="peer-port" type="number" value="4242" min="1" max="65535" /></label>
-        <button id="btn-start">Start sharing</button>
-        <button id="btn-stop" disabled>Stop sharing</button>
-        <button id="btn-discover">Find peers</button>
-      </div>
-      <div id="peers" class="peers"></div>
-      <div class="grid">
-        <label>Send to host<input id="send-host" type="text" placeholder="192.168.1.20" /></label>
-        <label>Port<input id="send-port" type="number" value="4242" /></label>
-        <input id="send-input" type="file" multiple hidden />
-        <button id="btn-send">Choose files & send</button>
-      </div>
-    </section>
+    <!-- RIGHT: tools -->
+    <aside id="right" class="sidebar right">
+      <section class="tool open" data-tool="import">
+        <button class="tool-head" type="button"><span class="chev">&#9662;</span><h2>Import</h2></button>
+        <div class="tool-body">
+          <label>Document title (optional)
+            <input id="import-title" type="text" placeholder="e.g. Tax records 2026" />
+          </label>
+          <label>Tags (comma separated)
+            <input id="import-tags" type="text" placeholder="finance, receipts" />
+          </label>
+          <label class="check"><input id="import-group" type="checkbox" /> Combine into one document</label>
+          <label class="check"><input id="import-ocr" type="checkbox" /> Run OCR on images</label>
+          <label>Language
+            <input id="ocr-lang" type="text" value="eng" />
+          </label>
+          <div class="row">
+            <button id="btn-files" class="primary small">Add files</button>
+            <button id="btn-folder" class="small">Add folder</button>
+            <button id="btn-camera" class="small">Capture photo</button>
+          </div>
+          <input id="file-input" type="file" multiple hidden />
+          <input id="folder-input" type="file" webkitdirectory directory multiple hidden />
+          <input id="camera-input" type="file" accept="image/*" capture="environment" multiple hidden />
+        </div>
+      </section>
 
-    <section class="card">
-      <h2>Offline bundles</h2>
-      <div class="grid">
-        <label>Bundle filename<input id="bundle-name" type="text" value="panarchiv-export.parbundle" /></label>
-        <label class="check"><input id="bundle-all" type="checkbox" checked /> Include all documents</label>
-        <button id="btn-export">Export bundle</button>
-        <input id="bundle-input" type="file" accept=".parbundle" hidden />
-        <button id="btn-import-bundle">Import bundle</button>
-      </div>
-      <p class="hint">Exported bundles are saved under ~/.panarchiv/archive/exports (or the app's home directory on Android).</p>
-    </section>
+      <section class="tool" data-tool="programs">
+        <button class="tool-head" type="button"><span class="chev">&#9656;</span><h2>Open files with&#8230;</h2></button>
+        <div class="tool-body">
+          <p class="hint">Add external programs to open any file. Use <code>{file}</code> as a placeholder &mdash; if omitted, the file is passed as the last argument. Examples: <code>gimp {file}</code>, <code>code {file}</code>, <code>evince {file}</code>.</p>
+          <div id="programs" class="programs"></div>
+          <div class="program-add">
+            <div class="pa-row">
+              <input id="prog-name" type="text" placeholder="Name (e.g. GIMP)" />
+              <input id="prog-exts" type="text" placeholder="Extensions (png, jpg) — optional" />
+            </div>
+            <div class="pa-row">
+              <input id="prog-cmd" type="text" placeholder="Command (e.g. gimp {file})" />
+              <button id="prog-add" class="small">Add program</button>
+            </div>
+          </div>
+          <button id="programs-reset" class="link-btn danger">Reset to examples</button>
+        </div>
+      </section>
 
-    <div id="log" class="log"></div>
-  </main>
+      <section class="tool" data-tool="p2p">
+        <button class="tool-head" type="button"><span class="chev">&#9656;</span><h2>Peer to peer</h2></button>
+        <div class="tool-body">
+          <label>Device name<input id="peer-name" type="text" value="My panarchiv" /></label>
+          <label>Port<input id="peer-port" type="number" value="4242" min="1" max="65535" /></label>
+          <div class="row">
+            <button id="btn-start" class="small">Start sharing</button>
+            <button id="btn-stop" class="small" disabled>Stop</button>
+            <button id="btn-discover" class="small">Find peers</button>
+          </div>
+          <div id="peers" class="peers"></div>
+          <label>Send to host<input id="send-host" type="text" placeholder="192.168.1.20" /></label>
+          <label>Port<input id="send-port" type="number" value="4242" /></label>
+          <div class="row">
+            <button id="btn-send" class="small">Choose files & send</button>
+          </div>
+          <input id="send-input" type="file" multiple hidden />
+        </div>
+      </section>
+
+      <section class="tool" data-tool="bundles">
+        <button class="tool-head" type="button"><span class="chev">&#9656;</span><h2>Offline bundles</h2></button>
+        <div class="tool-body">
+          <label>Bundle filename<input id="bundle-name" type="text" value="panarchiv-export.parbundle" /></label>
+          <label class="check"><input id="bundle-all" type="checkbox" checked /> Include all documents</label>
+          <div class="row">
+            <button id="btn-export" class="small">Export bundle</button>
+            <button id="btn-import-bundle" class="small">Import bundle</button>
+          </div>
+          <input id="bundle-input" type="file" accept=".parbundle" hidden />
+        </div>
+      </section>
+
+      <div class="log-wrap">
+        <div class="log-head"><h2>Activity</h2><button id="log-clear" class="link-btn">Clear</button></div>
+        <div id="log" class="log"></div>
+      </div>
+    </aside>
+  </div>
 
   <script src="src/main.js"></script>
 </body>

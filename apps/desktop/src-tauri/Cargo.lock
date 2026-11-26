@@ -2300,10 +2300,12 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "panarchiv-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
+ "jni",
+ "ndk-context",
  "panarchiv-core",
  "serde",
  "serde_json",
@@ -2314,7 +2316,7 @@ dependencies = [
 
 [[package]]
 name = "panarchiv-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",

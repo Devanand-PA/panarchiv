@@ -110,9 +110,31 @@ Rust core is shared with desktop, so the archive format is identical everywhere.
 
 ### GUI capabilities
 
+The app uses a three-pane layout: a **directory tree** on the left, the
+selected folder's files in the middle, and a collapsible **tools sidebar** on
+the right (import, open-with, peer to peer, bundles, and an activity log).
+
+- **Directory view** — documents are filed into folders by their tags. Use a
+  `/` in a tag (e.g. `finance/taxes`) to build nested folders. Untagged
+  documents live under *Untagged*; *All files* shows everything.
+- **Open files with any external program** — click a file's **Open** button to
+  launch it with your last-used program (or the system default), or use
+  **Open with ▾** to pick any registered program, the system default, an
+  ad-hoc command, or **Reveal in file manager**. Register programs under *Open
+  files with…* using a command template such as `gimp {file}` (if you omit
+  `{file}`, the file is passed as the last argument). Because the blob store is
+  content-addressed and hash-named, Panarchiv copies each file to a stable,
+  extension-bearing path under `<root>/opens/` before handing it off.
+  **On Android / iOS**, "open externally" means the *system app chooser*: the
+  file is copied into the app cache and launched via an `ACTION_VIEW` intent
+  wrapped in `Intent.createChooser`, so the OS shows the familiar "Open with…"
+  sheet (image → Photos/editor, PDF → a PDF viewer, …) and remembers the choice.
+  The per-program command template is a desktop-only concept and is ignored on
+  mobile; "Reveal" also falls back to opening the chooser there.
 - Import files, folders, or a camera photo. Set a title, tags, and optionally
   run OCR immediately after import.
-- Browse and search documents; run OCR per image; delete documents.
+- Browse and search documents (titles, tags, filenames, and OCR text); run OCR
+  per image; export or delete documents.
 - Start/stop a LAN sharing endpoint, discover peers, and send selected files
   to a peer by clicking a discovered peer or typing a host/port.
 - Export bundles (all documents or a single document) and import bundles.
