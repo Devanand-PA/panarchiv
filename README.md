@@ -181,6 +181,21 @@ Android requirements:
 - `ANDROID_HOME` (or `ANDROID_SDK_ROOT`) set
 - JDK 17 or newer
 
+#### Android release signing
+
+Android requires release APKs to be signed. The GitHub Release workflow retains
+one persistent upload key and signs every APK before publishing it; key material
+is never committed. Configure these repository secrets:
+
+- `ANDROID_KEYSTORE_BASE64`: a base64-encoded `.jks` or `.p12` keystore
+- `ANDROID_KEYSTORE_PASSWORD`: the keystore password
+- `ANDROID_KEY_ALIAS`: the key alias
+- `ANDROID_KEY_PASSWORD` (optional): the key password; defaults to the keystore
+  password
+
+Back up the keystore securely. Future updates must use the same key. Use Tauri's
+debug builds for local development; unsigned release APKs cannot be installed.
+
 The app produces both an APK and an AAB for all Android versions supported by
 Tauri 2 (Android 7.0 / API 24 and above). Tauri manages the WebView and the
 Rust core is shared with desktop, so the archive format is identical everywhere.
