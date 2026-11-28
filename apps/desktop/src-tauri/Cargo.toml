@@ -1,7 +1,7 @@
 [package]
 name = "panarchiv-app"
 description = "Panarchiv desktop and mobile GUI"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 authors = ["Devanand P A"]
 license = "MIT"
