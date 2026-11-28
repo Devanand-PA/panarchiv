@@ -594,6 +594,26 @@ fn get_documents(app: AppHandle) -> Result<Vec<Document>, String> {
     Ok(archive.list().to_vec())
 }
 
+/// Directories are tag paths the user created, including empty ones.
+#[tauri::command]
+fn get_directories(app: AppHandle) -> Result<Vec<String>, String> {
+    Ok(open_archive(&app)?.directories())
+}
+
+#[tauri::command]
+fn create_directory(app: AppHandle, path: String) -> Result<Vec<String>, String> {
+    let mut archive = open_archive(&app)?;
+    archive.create_directory(&path).map_err(err)?;
+    Ok(archive.directories())
+}
+
+#[tauri::command]
+fn delete_directory(app: AppHandle, path: String) -> Result<Vec<String>, String> {
+    let mut archive = open_archive(&app)?;
+    archive.delete_directory(&path).map_err(err)?;
+    Ok(archive.directories())
+}
+
 #[tauri::command]
 fn search_documents(app: AppHandle, query: String) -> Result<Vec<Document>, String> {
     let archive = open_archive(&app)?;
@@ -994,6 +1014,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_documents,
+            get_directories,
+            create_directory,
+            delete_directory,
             search_documents,
             archive_info,
             unlock_archive,

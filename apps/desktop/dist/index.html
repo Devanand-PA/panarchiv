@@ -6,9 +6,15 @@
   <title>Panarchiv</title>
   <link rel="stylesheet" href="src/styles.css" />
 </head>
-<body class="show-left show-right">
+<body>
+  <script>
+    // Panels are persistent on desktop but start closed as overlays on small screens.
+    if (!window.matchMedia('(max-width: 1024px)').matches) {
+      document.body.classList.add('show-left', 'show-right');
+    }
+  </script>
   <header>
-    <button id="toggle-left" class="icon-btn" title="Toggle directories" aria-label="Toggle directories">&#9776;</button>
+    <button id="toggle-left" class="icon-btn" title="Toggle directories" aria-label="Toggle directories" aria-controls="left" aria-expanded="false">&#9776;</button>
     <div class="brand">
       <span class="logo">P</span>
       <div class="brand-text"><h1>Panarchiv</h1><p>Your documents, everywhere</p></div>
@@ -18,8 +24,10 @@
     </div>
     <div id="status" class="status">Ready</div>
     <button id="theme-toggle" class="theme-toggle" title="Theme: follow system (click for light)" aria-label="Toggle theme">&#127760;</button>
-    <button id="toggle-right" class="icon-btn" title="Toggle tools" aria-label="Toggle tools">&#9881;</button>
+    <button id="toggle-right" class="icon-btn" title="Toggle tools" aria-label="Toggle tools" aria-controls="right" aria-expanded="false">&#9881;</button>
   </header>
+
+  <div id="scrim" class="scrim" aria-hidden="true"></div>
 
   <div class="layout">
     <!-- LEFT: directory tree -->
@@ -27,8 +35,14 @@
       <div class="sidebar-head">
         <h2>Directories</h2>
         <button id="nav-all" class="link-btn">All files</button>
+        <button id="btn-new-dir" class="icon-btn" title="New directory" aria-label="New directory">&#43;</button>
+        <button id="close-left" class="icon-btn drawer-close" title="Close directories" aria-label="Close directories">&#10005;</button>
       </div>
       <nav id="tree" class="tree" aria-label="Directory tree"></nav>
+      <section class="tags-panel" aria-label="Tags">
+        <div class="panel-head"><h2>Tags</h2><span id="tag-total" class="count">0</span></div>
+        <div id="tag-list" class="tag-list"></div>
+      </section>
     </aside>
 
     <!-- CENTER: files -->
@@ -53,6 +67,10 @@
 
     <!-- RIGHT: tools -->
     <aside id="right" class="sidebar right">
+      <div class="drawer-head">
+        <h2>Tools &amp; settings</h2>
+        <button id="close-right" class="icon-btn drawer-close" title="Close tools" aria-label="Close tools">&#10005;</button>
+      </div>
       <section class="tool open" data-tool="import">
         <button class="tool-head" type="button"><span class="chev">&#9662;</span><h2>Import</h2></button>
         <div class="tool-body">
@@ -190,6 +208,21 @@
         <div id="log" class="log"></div>
       </div>
     </aside>
+  </div>
+
+  <!-- New directory: directories are tag paths, so an empty one is a tag
+       reserved for documents that will be imported later. -->
+  <div id="newdir" class="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="newdir-title">
+      <h2 id="newdir-title">New directory</h2>
+      <p class="hint">Directories are tags. Use <code>/</code> to nest them, e.g. <code>finance/2026</code>.</p>
+      <input id="newdir-name" type="text" autocomplete="off" placeholder="finance/2026" />
+      <p id="newdir-error" class="error-text" hidden></p>
+      <div class="row modal-actions">
+        <button id="newdir-cancel" class="small">Cancel</button>
+        <button id="newdir-create" class="primary small">Create</button>
+      </div>
+    </div>
   </div>
 
   <!-- Unlock dialog: shown when the archive is protected by a passphrase -->

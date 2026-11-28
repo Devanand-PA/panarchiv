@@ -77,7 +77,7 @@ on the way.
 
 ```text
 <app-data>/archive/
-  manifest.json                # documents, items, OCR text, tags  (encrypted)
+  manifest.json                # documents, items, OCR, tags, directories (encrypted)
   key.bin                      # archive encryption key            (0600)
   blobs/<sha256>               # encrypted item bytes
   thumbs/<sha256>.png          # encrypted image thumbnails
@@ -202,17 +202,25 @@ Rust core is shared with desktop, so the archive format is identical everywhere.
 
 ### GUI capabilities
 
-The app uses a three-pane layout: a **directory tree** on the left, the
-selected folder's files in the middle, and a collapsible **tools sidebar** on
-the right (import, open-with, peer to peer, device sync, share a tag,
-encryption, bundles, and an activity log).
+The app uses a three-pane layout: a **directory tree** with a tag browser on
+the left, the selected folder's files in the middle, and a collapsible **tools
+sidebar** on the right (import, open-with, peer to peer, device sync, share a
+tag, encryption, bundles, and an activity log). On phones and tablets the two
+sidebars become slide-in panels: they start closed so files are visible
+immediately, only one opens at a time, and tapping the dimmed area, the ✕
+button, or Escape dismisses it.
 
 - **Directory view** — documents are filed into folders by their tags. Use a
   `/` in a tag (e.g. `finance/taxes`) to build nested folders. Untagged
-  documents live under *Untagged*; *All files* shows everything.
-- **Tags** — every card has a **Tags** button that opens an editor: add tags
-  one by one or comma-separated, rename them in place, or remove them. Tags
-  are stored with the document and are searched alongside titles and OCR text.
+  documents live under *Untagged*; *All files* shows everything. The **+**
+  button in the directory header creates an empty directory (a tag path saved
+  in the archive), so you can organise documents before importing them; the
+  ✕ next to a folder removes that empty placeholder.
+- **Tags** — a dedicated **Tags** section lists every tag with its document
+  count and jumps straight to its folder. Every card also has a **Tags**
+  button that opens an editor: add tags one by one or comma-separated, rename
+  them in place, or remove them. Tags are stored with the document and are
+  searched alongside titles and OCR text.
 - **Open files with any external program** — click a file's **Open** button to
   launch it with your last-used program (or the system default), or use
   **Open with ▾** to pick any registered program, the system default, an

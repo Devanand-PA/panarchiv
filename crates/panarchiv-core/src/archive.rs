@@ -488,6 +488,72 @@ impl Archive {
         })
     }
 
+    /// Normalise a directory path entered by the user. Both `/` and `\` act
+    /// as separators; empty segments are dropped so stray slashes are harmless.
+    pub fn normalize_directory(path: &str) -> Option<String> {
+        let joined = path
+            .replace('\\', "/")
+            .split('/')
+            .map(str::trim)
+            .filter(|seg| !seg.is_empty())
+            .collect::<Vec<_>>()
+            .join("/");
+        if joined.is_empty() {
+            None
+        } else {
+            Some(joined)
+        }
+    }
+
+    /// Every directory the user created, sorted for a stable tree.
+    pub fn directories(&self) -> Vec<String> {
+        let mut paths = self.manifest.directories.clone();
+        paths.sort();
+        paths.dedup();
+        paths
+    }
+
+    /// Persist empty directories (tag paths) so they survive a restart.
+    pub fn add_directories(&mut self, paths: &[String]) -> Result<()> {
+        let mut cleaned = Vec::new();
+        for path in paths {
+            if let Some(path) = Self::normalize_directory(path) {
+                if !cleaned.contains(&path) {
+                    cleaned.push(path);
+                }
+            }
+        }
+        if cleaned.is_empty() {
+            return Ok(());
+        }
+        self.mutate(|manifest| {
+            for path in cleaned {
+                if !manifest.directories.contains(&path) {
+                    manifest.directories.push(path);
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// Create a single directory, e.g. `finance/2026`.
+    pub fn create_directory(&mut self, path: &str) -> Result<()> {
+        let path =
+            Self::normalize_directory(path).ok_or_else(|| msg("directory name cannot be empty"))?;
+        self.add_directories(&[path])
+    }
+
+    /// Remove a directory placeholder. Documents that still carry the tag
+    /// keep the directory visible, since the tree is derived from tags too.
+    pub fn delete_directory(&mut self, path: &str) -> Result<()> {
+        let path =
+            Self::normalize_directory(path).ok_or_else(|| msg("directory name cannot be empty"))?;
+        self.mutate(|manifest| {
+            manifest.directories.retain(|p| p != &path);
+            Ok(())
+        })
+    }
+
     pub fn remove_document(&mut self, id: &str) -> Result<()> {
         self.mutate(|manifest| {
             let before = manifest.documents.len();
@@ -895,6 +961,28 @@ mod tests {
     }
 
     #[test]
+    fn directories_are_normalised_and_persist() {
+        let dir = std::env::temp_dir().join(format!("pa-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut archive = Archive::open(dir.join("archive")).unwrap();
+        archive.create_directory(" finance / 2026 ").unwrap();
+        archive.create_directory("finance\\receipts").unwrap();
+        archive.create_directory("finance/2026").unwrap(); // duplicate
+        assert_eq!(
+            archive.directories(),
+            vec!["finance/2026".to_string(), "finance/receipts".to_string()]
+        );
+
+        let reopened = Archive::open(dir.join("archive")).unwrap();
+        assert_eq!(reopened.directories(), archive.directories());
+
+        let mut archive = archive;
+        archive.delete_directory("finance/2026").unwrap();
+        assert_eq!(archive.directories(), vec!["finance/receipts".to_string()]);
+    }
+
+    #[test]
     fn set_tags_replaces_cleans_and_persists() {
         let dir = std::env::temp_dir().join(format!("pa-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
@@ -1001,6 +1089,7 @@ mod tests {
             version: 1,
             name: "legacy".into(),
             documents: vec![doc],
+            directories: Vec::new(),
         };
         fs::write(
             root.join("manifest.json"),

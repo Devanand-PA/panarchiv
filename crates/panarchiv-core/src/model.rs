@@ -97,6 +97,10 @@ pub struct Manifest {
     pub version: u32,
     pub name: String,
     pub documents: Vec<Document>,
+    /// Tag paths the user has created as directories, including empty ones.
+    /// `#[serde(default)]` keeps older manifests readable.
+    #[serde(default)]
+    pub directories: Vec<String>,
 }
 
 impl Manifest {
@@ -105,6 +109,7 @@ impl Manifest {
             version: 1,
             name: name.into(),
             documents: Vec::new(),
+            directories: Vec::new(),
         }
     }
 }

@@ -338,6 +338,7 @@ function renderPrograms() {
 /* ------------------------------------------------------------------ state */
 
 let allDocs = [];
+let knownDirs = [];
 let archiveInfo = null;
 const state = {
   query: '',
@@ -351,7 +352,11 @@ const thumbCache = new Map();
 
 /* ------------------------------------------------------ directory (tags) */
 
-function buildTree(docs) {
+function tagPath(tag) {
+  return String(tag).split('/').map((s) => s.trim()).filter(Boolean);
+}
+
+function buildTree(docs, directories = []) {
   const root = { name: '', path: [], children: new Map(), docs: new Set() };
   const untagged = [];
   function ensure(segs) {
@@ -367,13 +372,18 @@ function buildTree(docs) {
     return cur;
   }
   for (const doc of docs) {
-    const tags = (doc.tags || []).map((t) => t.trim()).filter(Boolean);
+    const tags = (doc.tags || []).map((t) => String(t).trim()).filter(Boolean);
     if (!tags.length) { untagged.push(doc); continue; }
     for (const tag of tags) {
-      const segs = tag.split('/').map((s) => s.trim()).filter(Boolean);
+      const segs = tagPath(tag);
       if (!segs.length) { untagged.push(doc); continue; }
       ensure(segs).docs.add(doc.id);
     }
+  }
+  // Created directories stay visible even while they hold no documents.
+  for (const dir of directories) {
+    const segs = tagPath(dir);
+    if (segs.length) ensure(segs);
   }
   return { root, untagged };
 }
@@ -385,7 +395,7 @@ function subtreeCount(node) {
 }
 
 function renderTree() {
-  const tree = buildTree(allDocs);
+  const tree = buildTree(allDocs, knownDirs);
   const root = $('tree');
   const parts = [];
 
@@ -423,6 +433,7 @@ function treeNode(node, depth) {
       <span class="glyph">${hasKids ? '📂' : '📁'}</span>
       <span class="name">${escapeHtml(node.name)}</span>
       <span class="count">${node.docs.size || subtreeCount(node)}</span>
+      <button type="button" class="tree-del" data-tree-delete="${escapeHtml(pathKey)}" title="Delete directory" aria-label="Delete directory ${escapeHtml(node.name)}">&#10005;</button>
     </div>`;
   if (hasKids && open) {
     const sorted = [...node.children.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -430,6 +441,40 @@ function treeNode(node, depth) {
   }
   return `<div class="tree-branch">${html}</div>`;
 }
+
+/* ----------------------------------------------------------- tag browser */
+
+function renderTagList() {
+  const counts = new Map();
+  for (const doc of allDocs) {
+    for (const raw of doc.tags || []) {
+      const tag = String(raw).trim();
+      if (tag) counts.set(tag, (counts.get(tag) || 0) + 1);
+    }
+  }
+  const tags = [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  $('tag-total').textContent = String(tags.length);
+  const list = $('tag-list');
+  if (!tags.length) {
+    list.innerHTML = '<p class="tag-hint">No tags yet. Type them when importing, or open a document and use <b>Tags</b>.</p>';
+    return;
+  }
+  list.innerHTML = tags.map(([tag, count]) => {
+    const current = state.selected.type === 'path' && state.selected.path.join('/') === tag;
+    return `<button type="button" class="tag clickable ${current ? 'selected' : ''}" data-tag="${escapeHtml(tag)}" title="${count} document(s)">${escapeHtml(tag)} <span class="count">${count}</span></button>`;
+  }).join('');
+}
+
+$('tag-list').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-tag]');
+  if (!btn) return;
+  state.selected = { type: 'path', path: tagPath(btn.dataset.tag) };
+  state.query = '';
+  $('search').value = '';
+  revealSelection();
+  renderTree(); renderFiles(); renderBreadcrumb(); renderTagList();
+  if (compactPanels.matches) closePanels();
+});
 
 /* ------------------------------------------------------------- matching */
 
@@ -490,7 +535,7 @@ function renderBreadcrumb() {
   el.querySelectorAll('[data-crumb]').forEach((b) => b.addEventListener('click', () => {
     state.selected = JSON.parse(b.dataset.crumb);
     revealSelection();
-    renderTree(); renderFiles(); renderBreadcrumb();
+    renderTree(); renderFiles(); renderBreadcrumb(); renderTagList();
   }));
 }
 
@@ -741,7 +786,8 @@ $('files').addEventListener('click', async (e) => {
     state.query = '';
     $('search').value = '';
     revealSelection();
-    renderTree(); renderFiles(); renderBreadcrumb();
+    renderTree(); renderFiles(); renderBreadcrumb(); renderTagList();
+    if (compactPanels.matches) closePanels();
     return;
   }
 
@@ -795,7 +841,23 @@ $('files').addEventListener('click', async (e) => {
 
 /* ------------------------------------------------------------- tree nav */
 
-$('tree').addEventListener('click', (e) => {
+$('tree').addEventListener('click', async (e) => {
+  const del = e.target.closest('[data-tree-delete]');
+  if (del) {
+    e.stopPropagation();
+    const dirPath = JSON.parse(del.getAttribute('data-tree-delete')).join('/');
+    if (!confirm(`Delete the directory “${dirPath}”? Documents tagged with it stay in All files.`)) return;
+    try {
+      const dirs = await guarded(() => invoke('delete_directory', { path: dirPath }));
+      knownDirs = dirs || [];
+      await refresh();
+      log(`Deleted directory ${dirPath}`);
+      status('Directory deleted');
+    } catch (err) {
+      if (!/cancelled/i.test(String(err))) log(`Could not delete directory: ${err}`);
+    }
+    return;
+  }
   const toggle = e.target.closest('[data-tree-toggle]');
   if (toggle) {
     e.stopPropagation();
@@ -816,12 +878,14 @@ $('tree').addEventListener('click', (e) => {
   renderTree();
   renderFiles();
   renderBreadcrumb();
+  if (compactPanels.matches) closePanels(); // reveal files behind the drawer
 });
 
 $('nav-all').addEventListener('click', () => {
   state.selected = { type: 'all' };
   state.query = ''; $('search').value = '';
   revealSelection(); renderTree(); renderFiles(); renderBreadcrumb();
+  if (compactPanels.matches) closePanels();
 });
 
 // Make sure ancestors of the selected path are expanded.
@@ -850,10 +914,116 @@ function syncViewButtons() {
 $('view-grid').addEventListener('click', () => { state.view = 'grid'; syncViewButtons(); renderFiles(); });
 $('view-list').addEventListener('click', () => { state.view = 'list'; syncViewButtons(); renderFiles(); });
 
-$('toggle-left').addEventListener('click', () => document.body.classList.toggle('show-left'));
-$('toggle-right').addEventListener('click', () => document.body.classList.toggle('show-right'));
+/* ------------------------------------------------------------ panels */
+
+const compactPanels = window.matchMedia('(max-width: 1024px)');
+
+function syncPanels() {
+  const left = document.body.classList.contains('show-left');
+  const right = document.body.classList.contains('show-right');
+  const overlay = compactPanels.matches && (left || right);
+  document.body.classList.toggle('drawer-open', overlay);
+  for (const [id, open] of [['toggle-left', left], ['toggle-right', right]]) {
+    $(id).classList.toggle('active', open);
+    $(id).setAttribute('aria-expanded', String(open));
+  }
+}
+
+function setPanel(side, open) {
+  // On small screens a panel is a temporary overlay: never stack two of them.
+  if (open && compactPanels.matches) {
+    document.body.classList.remove(side === 'left' ? 'show-right' : 'show-left');
+  }
+  document.body.classList.toggle(`show-${side}`, open);
+  syncPanels();
+}
+
+function closePanels() {
+  document.body.classList.remove('show-left', 'show-right');
+  syncPanels();
+}
+
+$('toggle-left').addEventListener('click', () => setPanel('left', !document.body.classList.contains('show-left')));
+$('toggle-right').addEventListener('click', () => setPanel('right', !document.body.classList.contains('show-right')));
+$('close-left').addEventListener('click', closePanels);
+$('close-right').addEventListener('click', closePanels);
+$('scrim').addEventListener('click', closePanels);
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  closePanels();
+  if (!$('newdir').hidden) closeNewDirDialog();
+});
+
+compactPanels.addEventListener('change', (e) => {
+  // Panels are docked on desktop, dismissed when crossing into overlay mode.
+  if (e.matches) closePanels();
+  else {
+    document.body.classList.add('show-left', 'show-right');
+    syncPanels();
+  }
+  updateSearchPlaceholder();
+});
+
+function updateSearchPlaceholder() {
+  $('search').placeholder = compactPanels.matches
+    ? 'Search documents\u2026'
+    : 'Search titles, tags, filenames, OCR text\u2026';
+}
+
+updateSearchPlaceholder();
+if (compactPanels.matches) closePanels();
+else syncPanels();
 
 $('btn-import-top').addEventListener('click', () => $('file-input').click());
+
+/* --------------------------------------------------------- new directory */
+
+function openNewDirDialog() {
+  $('newdir').hidden = false;
+  $('newdir-name').value = '';
+  $('newdir-error').hidden = true;
+  setTimeout(() => $('newdir-name').focus(), 0);
+}
+
+function closeNewDirDialog() {
+  $('newdir').hidden = true;
+}
+
+$('btn-new-dir').addEventListener('click', openNewDirDialog);
+$('newdir-cancel').addEventListener('click', () => {
+  $('newdir-error').hidden = true;
+  closeNewDirDialog();
+});
+$('newdir-name').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') $('newdir-create').click();
+});
+$('newdir-create').addEventListener('click', async () => {
+  const raw = $('newdir-name').value.trim();
+  if (!raw) {
+    $('newdir-error').textContent = 'Enter a name first.';
+    $('newdir-error').hidden = false;
+    return;
+  }
+  try {
+    const dirs = await guarded(() => invoke('create_directory', { path: raw }));
+    knownDirs = dirs || [];
+    // Reveal the new folder in the tree.
+    const segs = tagPath(raw);
+    for (let i = 1; i <= segs.length; i += 1) {
+      state.expandedPaths.add(JSON.stringify(segs.slice(0, i)));
+    }
+    closeNewDirDialog();
+    state.selected = { type: 'path', path: segs };
+    renderTree(); renderFiles(); renderBreadcrumb(); renderTagList();
+    if (compactPanels.matches) setPanel('left', true);
+    log(`Created directory ${segs.join('/')}`);
+    status('Directory created');
+  } catch (e) {
+    if (/cancelled/i.test(String(e))) { closeNewDirDialog(); return; }
+    $('newdir-error').textContent = String(e);
+    $('newdir-error').hidden = false;
+  }
+});
 
 /* ------------------------------------------------------------- accordion */
 
@@ -1289,9 +1459,16 @@ async function refresh() {
   try {
     const docs = await guarded(() => invoke('get_documents'));
     allDocs = docs || [];
+    try {
+      const dirs = await guarded(() => invoke('get_directories'));
+      knownDirs = Array.isArray(dirs) ? dirs : [];
+    } catch {
+      // Directory creation is best-effort: the tree still shows tag folders.
+    }
     renderTree();
     renderFiles();
     renderBreadcrumb();
+    renderTagList();
     refreshTagLists();
   } catch (e) {
     if (!isPassphraseError(e) && !/cancelled/i.test(String(e))) {

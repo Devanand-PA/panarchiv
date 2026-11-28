@@ -46,6 +46,9 @@ struct BundleManifest {
     name: String,
     exported_at: DateTime<Utc>,
     documents: Vec<Document>,
+    /// Empty directories travel with the documents they organise.
+    #[serde(default)]
+    directories: Vec<String>,
 }
 
 fn append_bytes<W: std::io::Write>(
@@ -94,6 +97,7 @@ pub fn export_bundle(
         name: archive.manifest().name.clone(),
         exported_at: Utc::now(),
         documents,
+        directories: archive.manifest().directories.clone(),
     };
     let json = serde_json::to_vec_pretty(&manifest)?;
 
@@ -231,6 +235,7 @@ pub fn import_bundle(
     for doc in &manifest.documents {
         ids.push(archive.merge_document(doc)?);
     }
+    archive.add_directories(&manifest.directories)?;
     Ok(ids)
 }
 
